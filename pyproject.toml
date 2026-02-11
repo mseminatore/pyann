@@ -38,7 +38,7 @@ Homepage = "https://github.com/mseminatore/pyann"
 Repository = "https://github.com/mseminatore/pyann"
 
 [tool.setuptools.packages.find]
-where = ["."]
+where = ["src"]
 include = ["pyann*"]
 
 [tool.pytest.ini_options]

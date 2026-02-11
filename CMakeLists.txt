@@ -117,7 +117,7 @@ if(EXISTS "${ANN_SOURCE_DIR}/ann_hypertune.c")
 endif()
 
 # Copy library to pyann package directory
-set(PYANN_LIB_DIR "${CMAKE_CURRENT_SOURCE_DIR}/pyann/lib")
+set(PYANN_LIB_DIR "${CMAKE_CURRENT_SOURCE_DIR}/src/pyann/lib")
 file(MAKE_DIRECTORY ${PYANN_LIB_DIR})
 
 add_custom_command(TARGET ann POST_BUILD

@@ -69,6 +69,10 @@ def _find_library() -> str:
         cwd / "build" / "Debug",
         cwd / "lib",
         cwd,
+        # src layout: library at project root level
+        package_dir.parent.parent / "build" / "Release",
+        package_dir.parent.parent / "build",
+        package_dir.parent.parent / "lib",
     ])
     
     # 5. System paths

@@ -14,7 +14,7 @@ fashion_mnist.nna
 *.dylib
 
 # Built shared libraries
-pyann/lib/
+src/pyann/lib/
 
 # Distribution / packaging
 .Python
