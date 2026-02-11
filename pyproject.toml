@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=61.0", "cffi>=1.15.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pyann"
+version = "0.1.0"
+description = "Python wrapper for libann neural network library"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.8"
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "cffi>=1.15.0",
+]
+
+[project.optional-dependencies]
+numpy = ["numpy>=1.20.0"]
+dev = [
+    "pytest>=7.0.0",
+    "numpy>=1.20.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/mseminatore/pyann"
+Repository = "https://github.com/mseminatore/pyann"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["pyann*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
