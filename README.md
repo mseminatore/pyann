@@ -9,9 +9,12 @@ Python wrapper for the [libann](https://github.com/mseminatore/ann) neural netwo
 - **Activation functions**: Sigmoid, ReLU, LeakyReLU, Tanh, Softsign, Softmax
 - **Loss functions**: MSE, Categorical Cross-Entropy
 - **Learning rate schedulers**: Step decay, Exponential decay, Cosine annealing
-- **Hyperparameter tuning**: Grid search, Random search, Bayesian optimization
+- **Hyperparameter tuning**: Grid search, Random search, Bayesian optimization, TPE
 - **NumPy optional**: Works with Python lists, optimized for NumPy arrays
-- **Model persistence**: Save/load in text or binary format, ONNX export
+- **Model persistence**: Save/load in text or binary format, ONNX export/import
+- **Regularization**: L1 and L2 (weight decay) regularization, dropout
+- **Evaluation**: Accuracy scoring, confusion matrix with MCC
+- **Data utilities**: CSV loading, normalization, one-hot encoding, train/val splitting
 
 ## Installation
 
@@ -113,6 +116,15 @@ scheduler = CosineAnnealing(T_max=100, min_lr=0.0001)
 model.fit(X, y, epochs=100, lr_scheduler=scheduler)
 ```
 
+### Early Stopping
+
+```python
+from pyann.callbacks import EarlyStopping
+
+stopping = EarlyStopping(patience=10, min_delta=0.0001)
+model.fit(X, y, epochs=500, callbacks=[stopping])
+```
+
 ### Hyperparameter Tuning
 
 ```python
@@ -141,6 +153,26 @@ best, results = search.run(
 model = search.create_model(best, input_size=784, output_size=10)
 ```
 
+### TPE Hyperparameter Search
+
+```python
+from pyann.hypertune import TPESearch, HyperparamSpace
+
+space = HyperparamSpace(
+    learning_rate=(0.0001, 0.01),
+    batch_sizes=[32, 64, 128],
+    hidden_layers=(1, 3),
+    layer_sizes=[64, 128, 256],
+)
+
+# TPE uses KDE to model good vs bad configs
+search = TPESearch(space, n_trials=50, n_startup=10, gamma=0.25)
+best, results = search.run(
+    X_train, y_train, X_val, y_val,
+    input_size=784, output_size=10
+)
+```
+
 ### Save and Load
 
 ```python
@@ -151,6 +183,26 @@ model.export_onnx('model.onnx.json')  # ONNX format
 
 # Load
 loaded = Sequential.load('model.nna')
+loaded = Sequential.load_onnx('model.onnx.json')  # From ONNX
+```
+
+### Data Utilities
+
+```python
+from pyann.utils import load_csv, split_data
+from pyann.utils.data import normalize, one_hot_encode
+
+# Load CSV data
+data, rows, cols = load_csv('data.csv', has_header=True)
+
+# Normalize features
+X_norm, mean, std = normalize(X)
+
+# One-hot encode labels
+y_encoded = one_hot_encode(labels, num_classes=10)
+
+# Split into train/validation sets
+X_train, y_train, X_val, y_val = split_data(X, y, train_ratio=0.8)
 ```
 
 ## API Reference
@@ -163,12 +215,19 @@ Sequential(layers=None, optimizer=None, loss=Loss.MSE, name=None)
 
 Methods:
 - `add(layer)` - Add a layer
-- `compile(optimizer, loss, learning_rate)` - Configure training
+- `compile(optimizer, loss, learning_rate, weight_decay, l1_regularization)` - Configure training
 - `fit(x, y, epochs, batch_size, ...)` - Train the model
 - `predict(x)` - Generate predictions
 - `evaluate(x, y)` - Compute accuracy
+- `confusion_matrix(x, y)` - Compute TP/FP/TN/FN and MCC (binary classification)
 - `save(filepath, format)` - Save model
 - `load(filepath, format)` - Load model (classmethod)
+- `export_onnx(filepath)` - Export to ONNX JSON format
+- `load_onnx(filepath)` - Load from ONNX JSON (classmethod)
+- `export_learning_curve(filepath)` - Export training history as CSV
+- `clear_history()` - Clear training history to free memory
+- `set_weight_decay(lambda_)` - Set L2 regularization coefficient
+- `set_l1_regularization(lambda_)` - Set L1 regularization coefficient
 - `summary()` - Get model summary
 
 ### Layers
@@ -206,6 +265,26 @@ Activation.TANH
 Activation.SOFTSIGN
 Activation.SOFTMAX
 ```
+
+### Callbacks
+
+```python
+StepDecay(step_size, gamma=0.5)          # Multiply LR by gamma every step_size epochs
+ExponentialDecay(gamma=0.95)             # Multiply LR by gamma each epoch
+CosineAnnealing(T_max, min_lr=0.0001)   # Smooth decay to min_lr over T_max epochs
+EarlyStopping(patience=10, min_delta=0.0001)  # Stop when loss stops improving
+```
+
+### Hyperparameter Tuning
+
+```python
+GridSearch(space, lr_steps=3)                          # Exhaustive grid search
+RandomSearch(space, n_trials=50)                       # Random sampling
+BayesianSearch(space, n_trials=50, n_initial=10)       # Bayesian optimization
+TPESearch(space, n_trials=50, n_startup=10, gamma=0.25)  # Tree-structured Parzen Estimator
+```
+
+All accept a `HyperparamSpace` and return `(best_result, all_results)` from `run()`.
 
 ## License
 
