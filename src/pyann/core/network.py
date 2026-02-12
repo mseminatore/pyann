@@ -457,6 +457,25 @@ class Sequential:
         
         return model
     
+    def export_pikchr(self, filepath: Union[str, Path]) -> None:
+        """Export network architecture as a PIKCHR diagram.
+        
+        Generates a PIKCHR text file that can be rendered to SVG using
+        the pikchr tool: ``pikchr network.pikchr > network.svg``
+        
+        For small networks (≤10 nodes per layer), outputs a detailed diagram
+        with individual node circles and connections. For larger networks,
+        outputs a simplified box diagram with layer info.
+        
+        Args:
+            filepath: Output file path (typically .pikchr extension)
+        """
+        if not self._built:
+            raise NetworkError("Cannot export untrained model")
+        
+        result = lib.ann_export_pikchr(self._ptr, str(filepath).encode())
+        raise_for_error_code(result, f"Failed to export PIKCHR to {filepath}")
+    
     def export_learning_curve(self, filepath: Union[str, Path]) -> None:
         """Export training history as CSV for learning curve visualization.
         

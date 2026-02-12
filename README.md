@@ -12,6 +12,7 @@ Python wrapper for the [libann](https://github.com/mseminatore/ann) neural netwo
 - **Hyperparameter tuning**: Grid search, Random search, Bayesian optimization, TPE
 - **NumPy optional**: Works with Python lists, optimized for NumPy arrays
 - **Model persistence**: Save/load in text or binary format, ONNX export/import
+- **Network visualization**: Export architecture as PIKCHR diagrams (renders to SVG)
 - **Regularization**: L1 and L2 (weight decay) regularization, dropout
 - **Evaluation**: Accuracy scoring, confusion matrix with MCC
 - **Data utilities**: CSV loading, normalization, one-hot encoding, train/val splitting
@@ -186,6 +187,18 @@ loaded = Sequential.load('model.nna')
 loaded = Sequential.load_onnx('model.onnx.json')  # From ONNX
 ```
 
+### Network Visualization
+
+```python
+# Export architecture as PIKCHR diagram
+model.export_pikchr('network.pikchr')
+
+# Then render to SVG with the pikchr CLI tool:
+# pikchr network.pikchr > network.svg
+```
+
+Small networks (≤10 nodes per layer) get a detailed diagram with individual nodes and connections. Larger networks get a simplified box diagram.
+
 ### Data Utilities
 
 ```python
@@ -224,6 +237,7 @@ Methods:
 - `load(filepath, format)` - Load model (classmethod)
 - `export_onnx(filepath)` - Export to ONNX JSON format
 - `load_onnx(filepath)` - Load from ONNX JSON (classmethod)
+- `export_pikchr(filepath)` - Export architecture as PIKCHR diagram
 - `export_learning_curve(filepath)` - Export training history as CSV
 - `clear_history()` - Clear training history to free memory
 - `set_weight_decay(lambda_)` - Set L2 regularization coefficient
