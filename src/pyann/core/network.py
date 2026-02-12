@@ -59,6 +59,8 @@ class Sequential:
         self._ptr: Optional[object] = None
         self._built = False
         self._input_shape: Optional[Tuple[int, ...]] = None
+        self._weight_decay: Optional[float] = None
+        self._l1_regularization: Optional[float] = None
         
         if layers:
             for layer in layers:
@@ -95,7 +97,9 @@ class Sequential:
         self,
         optimizer: Union[str, Optimizer, None] = None,
         loss: Union[str, Loss, None] = None,
-        learning_rate: Optional[float] = None
+        learning_rate: Optional[float] = None,
+        weight_decay: Optional[float] = None,
+        l1_regularization: Optional[float] = None
     ) -> "Sequential":
         """Configure the model for training.
         
@@ -103,6 +107,8 @@ class Sequential:
             optimizer: Optimizer to use
             loss: Loss function
             learning_rate: Override the optimizer's learning rate
+            weight_decay: L2 regularization coefficient (0 = disabled)
+            l1_regularization: L1 regularization coefficient (0 = disabled)
             
         Returns:
             self for method chaining
@@ -113,6 +119,10 @@ class Sequential:
             self._loss = parse_loss(loss)
         if learning_rate is not None:
             self._optimizer.learning_rate = learning_rate
+        if weight_decay is not None:
+            self._weight_decay = weight_decay
+        if l1_regularization is not None:
+            self._l1_regularization = l1_regularization
         
         return self
     
@@ -173,6 +183,12 @@ class Sequential:
                 # Set dropout if specified
                 if layer.dropout > 0:
                     lib.ann_set_layer_dropout(self._ptr, i + 1, layer.dropout)
+        
+        # Apply regularization settings
+        if self._weight_decay is not None and self._weight_decay > 0:
+            lib.ann_set_weight_decay(self._ptr, self._weight_decay)
+        if self._l1_regularization is not None and self._l1_regularization > 0:
+            lib.ann_set_l1_regularization(self._ptr, self._l1_regularization)
         
         self._built = True
     
@@ -403,6 +419,137 @@ class Sequential:
         
         result = lib.ann_export_onnx(self._ptr, str(filepath).encode())
         raise_for_error_code(result, f"Failed to export ONNX to {filepath}")
+    
+    @classmethod
+    def load_onnx(cls, filepath: Union[str, Path]) -> "Sequential":
+        """Load a model from an ONNX JSON file.
+        
+        Args:
+            filepath: Path to ONNX JSON file
+            
+        Returns:
+            Loaded Sequential model
+        """
+        ptr = lib.ann_import_onnx(str(filepath).encode())
+        
+        if ptr == ffi.NULL:
+            raise NetworkError(f"Failed to load ONNX model from {filepath}")
+        
+        # Create model wrapper
+        model = cls.__new__(cls)
+        model._layers = []
+        model._optimizer = None
+        model._loss = Loss.MSE
+        model._name = None
+        model._ptr = ptr
+        model._built = True
+        model._input_shape = None
+        
+        # Reconstruct layer info from C network
+        n_layers = lib.ann_get_layer_count(ptr)
+        for i in range(n_layers):
+            units = lib.ann_get_layer_nodes(ptr, i)
+            activation = lib.ann_get_layer_activation(ptr, i)
+            if i == 0:
+                model._input_shape = (units,)
+            else:
+                model._layers.append(Dense(units, activation=Activation(activation)))
+        
+        return model
+    
+    def export_learning_curve(self, filepath: Union[str, Path]) -> None:
+        """Export training history as CSV for learning curve visualization.
+        
+        Writes epoch, loss, and learning rate data collected during training.
+        
+        Args:
+            filepath: Output CSV file path
+        """
+        if not self._built:
+            raise NetworkError("Cannot export learning curve from untrained model")
+        
+        result = lib.ann_export_learning_curve(self._ptr, str(filepath).encode())
+        raise_for_error_code(result, f"Failed to export learning curve to {filepath}")
+    
+    def clear_history(self) -> None:
+        """Clear training history to free memory or before retraining."""
+        if self._built and self._ptr is not None:
+            lib.ann_clear_history(self._ptr)
+    
+    def set_weight_decay(self, lambda_: float) -> "Sequential":
+        """Set L2 regularization (weight decay) coefficient.
+        
+        L2 regularization penalizes large weights by adding lambda * ||W||^2 to the loss.
+        Helps prevent overfitting by encouraging smaller, more distributed weights.
+        
+        Args:
+            lambda_: L2 regularization strength (0 = disabled, typical: 1e-4 to 1e-2)
+            
+        Returns:
+            self for method chaining
+        """
+        if not self._built:
+            self._build()
+        lib.ann_set_weight_decay(self._ptr, lambda_)
+        return self
+    
+    def set_l1_regularization(self, lambda_: float) -> "Sequential":
+        """Set L1 regularization (LASSO) coefficient.
+        
+        L1 regularization penalizes the absolute value of weights, encouraging sparsity.
+        Pushes small weights toward exactly zero, useful for feature selection.
+        
+        Args:
+            lambda_: L1 regularization strength (0 = disabled, typical: 1e-5 to 1e-3)
+            
+        Returns:
+            self for method chaining
+        """
+        if not self._built:
+            self._build()
+        lib.ann_set_l1_regularization(self._ptr, lambda_)
+        return self
+    
+    def confusion_matrix(
+        self, 
+        x: ArrayLike, 
+        y: ArrayLike
+    ) -> dict:
+        """Compute binary confusion matrix and Matthews Correlation Coefficient.
+        
+        For binary classification problems (2 output classes).
+        Class 0 = negative, Class 1 = positive.
+        
+        Args:
+            x: Input data
+            y: Expected outputs (one-hot encoded, shape [n_samples, 2])
+            
+        Returns:
+            Dictionary with keys: 'tp', 'fp', 'tn', 'fn', 'mcc'
+        """
+        if not self._built:
+            raise NetworkError("Model must be trained before computing confusion matrix")
+        
+        from pyann.core.tensor import Tensor
+        x_tensor = Tensor(to_array(x))
+        y_tensor = Tensor(to_array(y))
+        
+        tp = ffi.new("int *")
+        fp = ffi.new("int *")
+        tn = ffi.new("int *")
+        fn = ffi.new("int *")
+        
+        mcc = lib.ann_confusion_matrix(
+            self._ptr, x_tensor._ptr, y_tensor._ptr, tp, fp, tn, fn
+        )
+        
+        return {
+            'tp': tp[0],
+            'fp': fp[0],
+            'tn': tn[0],
+            'fn': fn[0],
+            'mcc': mcc
+        }
     
     def summary(self) -> str:
         """Get a string summary of the model architecture."""

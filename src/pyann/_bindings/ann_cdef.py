@@ -103,6 +103,10 @@ void ann_set_layer_dropout(PNetwork pnet, int layer_index, real rate);
 void ann_set_training_mode(PNetwork pnet, int is_training);
 void ann_set_weight_init(PNetwork pnet, Weight_init_type init_type);
 
+// Regularization
+void ann_set_weight_decay(PNetwork pnet, real lambda);
+void ann_set_l1_regularization(PNetwork pnet, real lambda);
+
 // Learning rate schedulers
 void ann_set_lr_scheduler(PNetwork pnet, LRSchedulerFunc scheduler, void *user_data);
 
