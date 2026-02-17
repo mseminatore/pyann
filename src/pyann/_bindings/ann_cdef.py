@@ -88,6 +88,9 @@ PNetwork ann_import_onnx(const char *filename);
 
 // Training and inference
 int ann_train_network(PNetwork pnet, PTensor x_train, PTensor y_train, int rows);
+int ann_train_begin(PNetwork pnet);
+real ann_train_step(PNetwork pnet, const real *inputs, const real *targets, int batch_size);
+void ann_train_end(PNetwork pnet);
 int ann_predict(PNetwork pnet, const real *inputs, real *outputs);
 real ann_evaluate_accuracy(PNetwork pnet, PTensor x_test, PTensor y_test);
 
