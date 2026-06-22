@@ -66,6 +66,17 @@ typedef real(*LRSchedulerFunc)(unsigned epoch, real base_lr, void *user_data);
 // Error callback type
 typedef void (*ErrorLogCallback)(int error_code, const char *error_message, const char *function_name);
 
+// CBLAS (only present when built with USE_CBLAS)
+void cblas_init(int threads);
+void cblas_shutdown(void);
+const char *cblas_get_config(void);
+const char *cblas_get_corename(void);
+const char *cblas_get_isa_features(void);
+
+// GPU (only present when built with USE_METAL or USE_CUDA)
+int ann_gpu_init(void);
+int tensor_metal_init(void);
+
 // Network creation and destruction
 PNetwork ann_make_network(Optimizer_type opt, Loss_type loss_type);
 int ann_add_layer(PNetwork pnet, int node_count, Layer_type layer_type, Activation_type activation_type);
@@ -87,7 +98,7 @@ int ann_export_onnx(const PNetwork pnet, const char *filename);
 PNetwork ann_import_onnx(const char *filename);
 
 // Training and inference
-int ann_train_network(PNetwork pnet, PTensor x_train, PTensor y_train, int rows);
+real ann_train_network(PNetwork pnet, PTensor x_train, PTensor y_train, int rows);
 int ann_train_begin(PNetwork pnet);
 real ann_train_step(PNetwork pnet, const real *inputs, const real *targets, int batch_size);
 void ann_train_end(PNetwork pnet);
@@ -114,9 +125,9 @@ void ann_set_l1_regularization(PNetwork pnet, real lambda);
 void ann_set_lr_scheduler(PNetwork pnet, LRSchedulerFunc scheduler, void *user_data);
 
 // Built-in scheduler parameter structs
-typedef struct { int step_size; real gamma; } LRStepParams;
+typedef struct { unsigned step_size; real gamma; } LRStepParams;
 typedef struct { real gamma; } LRExponentialParams;
-typedef struct { int T_max; real min_lr; } LRCosineParams;
+typedef struct { unsigned T_max; real min_lr; } LRCosineParams;
 
 // Built-in scheduler functions
 real ann_lr_scheduler_step(unsigned epoch, real base_lr, void *data);
@@ -131,7 +142,7 @@ Activation_type ann_get_layer_activation(const PNetwork pnet, int layer_index);
 // Confusion matrix
 real ann_confusion_matrix(PNetwork pnet, PTensor inputs, PTensor outputs, int *tp, int *fp, int *tn, int *fn);
 void ann_print_confusion_matrix(PNetwork pnet, PTensor inputs, PTensor outputs);
-int ann_class_prediction(PNetwork pnet, const real *outputs);
+int ann_class_prediction(const real *outputs, int classes);
 
 // Visualization and export
 int ann_export_pikchr(const PNetwork pnet, const char *filename);

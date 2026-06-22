@@ -35,7 +35,9 @@ def build_library(
     project_dir: Path,
     build_type: str = "Release",
     use_blas: bool = False,
-    use_cblas: bool = False
+    use_cblas: bool = False,
+    use_metal: bool = False,
+    use_cuda: bool = False,
 ):
     """Build the shared library."""
     cmake = find_cmake()
@@ -55,6 +57,11 @@ def build_library(
         cmake_args.append("-DUSE_CBLAS=ON")
     elif use_blas:
         cmake_args.append("-DUSE_BLAS=ON")
+
+    if use_metal:
+        cmake_args.append("-DUSE_METAL=ON")
+    if use_cuda:
+        cmake_args.append("-DUSE_CUDA=ON")
     
     print(f"Configuring with: {' '.join(cmake_args)}")
     subprocess.run(cmake_args, cwd=build_dir, check=True)
@@ -83,6 +90,8 @@ def main():
     parser.add_argument("--debug", action="store_true", help="Build debug version")
     parser.add_argument("--blas", action="store_true", help="Enable OpenBLAS")
     parser.add_argument("--cblas", action="store_true", help="Enable CBLAS")
+    parser.add_argument("--metal", action="store_true", help="Enable Apple Metal GPU acceleration (macOS only)")
+    parser.add_argument("--cuda", action="store_true", help="Enable NVIDIA CUDA GPU acceleration")
     parser.add_argument("--clean", action="store_true", help="Clean build directory first")
     
     args = parser.parse_args()
@@ -100,7 +109,9 @@ def main():
         project_dir,
         build_type="Debug" if args.debug else "Release",
         use_blas=args.blas,
-        use_cblas=args.cblas
+        use_cblas=args.cblas,
+        use_metal=args.metal,
+        use_cuda=args.cuda,
     )
 
 

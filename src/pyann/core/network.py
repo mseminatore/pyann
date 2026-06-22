@@ -243,8 +243,9 @@ class Sequential:
             self._setup_lr_scheduler(lr_scheduler)
         
         # Train
-        result = lib.ann_train_network(self._ptr, x_tensor._ptr, y_tensor._ptr, n_samples)
-        raise_for_error_code(result, "Training failed")
+        loss = lib.ann_train_network(self._ptr, x_tensor._ptr, y_tensor._ptr, n_samples)
+        if loss == 0.0:
+            raise NetworkError("Training failed")
         
         # Build history dict
         history = {"epochs": epochs}
@@ -260,19 +261,19 @@ class Sequential:
     def _setup_lr_scheduler(self, scheduler: LRScheduler) -> None:
         """Configure a learning rate scheduler."""
         if isinstance(scheduler, StepDecay):
-            params = ffi.new("LRStepParams *")
-            params.step_size = scheduler.step_size
-            params.gamma = scheduler.gamma
-            lib.ann_set_lr_scheduler(self._ptr, lib.ann_lr_scheduler_step, params)
+            self._lr_params = ffi.new("LRStepParams *")
+            self._lr_params.step_size = scheduler.step_size
+            self._lr_params.gamma = scheduler.gamma
+            lib.ann_set_lr_scheduler(self._ptr, lib.ann_lr_scheduler_step, self._lr_params)
         elif isinstance(scheduler, ExponentialDecay):
-            params = ffi.new("LRExponentialParams *")
-            params.gamma = scheduler.gamma
-            lib.ann_set_lr_scheduler(self._ptr, lib.ann_lr_scheduler_exponential, params)
+            self._lr_params = ffi.new("LRExponentialParams *")
+            self._lr_params.gamma = scheduler.gamma
+            lib.ann_set_lr_scheduler(self._ptr, lib.ann_lr_scheduler_exponential, self._lr_params)
         elif isinstance(scheduler, CosineAnnealing):
-            params = ffi.new("LRCosineParams *")
-            params.T_max = scheduler.T_max
-            params.min_lr = scheduler.min_lr
-            lib.ann_set_lr_scheduler(self._ptr, lib.ann_lr_scheduler_cosine, params)
+            self._lr_params = ffi.new("LRCosineParams *")
+            self._lr_params.T_max = scheduler.T_max
+            self._lr_params.min_lr = scheduler.min_lr
+            lib.ann_set_lr_scheduler(self._ptr, lib.ann_lr_scheduler_cosine, self._lr_params)
     
     def predict(self, x: ArrayLike) -> ArrayLike:
         """Generate predictions for input samples.

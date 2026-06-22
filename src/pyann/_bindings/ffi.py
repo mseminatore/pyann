@@ -3,9 +3,9 @@
 import os
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Dict, Optional
 
-from cffi import FFI
+from cffi import FFI, FFIError
 
 from pyann._bindings.tensor_cdef import TENSOR_CDEF
 from pyann._bindings.ann_cdef import ANN_CDEF
@@ -20,6 +20,9 @@ ffi.cdef(ANN_CDEF)
 
 # Library handle (lazily loaded)
 _lib: Optional[object] = None
+
+# Detected backend info (populated on library load)
+_backend_info: Optional[Dict[str, Optional[str]]] = None
 
 
 def _find_library() -> str:
@@ -103,19 +106,71 @@ def _find_library() -> str:
     )
 
 
+def _detect_backends(loaded_lib: object) -> Dict[str, Optional[str]]:
+    """Detect which acceleration backends are compiled into the library."""
+    info: Dict[str, Optional[str]] = {
+        "blas": None,
+        "gpu": None,
+        "cblas_config": None,
+        "cblas_corename": None,
+        "cblas_isa": None,
+    }
+
+    # Probe for CBLAS
+    try:
+        loaded_lib.cblas_init(-1)
+        info["blas"] = "cblas"
+        try:
+            info["cblas_config"] = ffi.string(loaded_lib.cblas_get_config()).decode()
+        except (FFIError, AttributeError):
+            pass
+        try:
+            info["cblas_corename"] = ffi.string(loaded_lib.cblas_get_corename()).decode()
+        except (FFIError, AttributeError):
+            pass
+        try:
+            info["cblas_isa"] = ffi.string(loaded_lib.cblas_get_isa_features()).decode()
+        except (FFIError, AttributeError):
+            pass
+    except (FFIError, AttributeError):
+        pass
+
+    # Probe for GPU backends via backend-specific symbols
+    try:
+        loaded_lib.tensor_metal_init
+        info["gpu"] = "metal"
+    except (FFIError, AttributeError):
+        pass
+
+    return info
+
+
 def _load_library() -> object:
     """Load the libann shared library.
-    
+
     Returns:
         CFFI library handle
     """
-    global _lib
+    global _lib, _backend_info
     if _lib is not None:
         return _lib
-    
+
     lib_path = _find_library()
     _lib = ffi.dlopen(lib_path)
+    _backend_info = _detect_backends(_lib)
+
     return _lib
+
+
+def get_backend_info() -> Dict[str, Optional[str]]:
+    """Return detected acceleration backend information.
+
+    Returns:
+        Dict with keys: blas, gpu, cblas_config, cblas_corename, cblas_isa.
+        Values are None when the corresponding backend is not compiled in.
+    """
+    _load_library()
+    return dict(_backend_info)
 
 
 @property
