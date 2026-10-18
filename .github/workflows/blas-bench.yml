@@ -79,10 +79,12 @@ jobs:
       - name: Run benchmarks
         run: |
           python -m pip install numpy cffi
+          # A crash must be visible: no pipes, per-variant exit codes, faulthandler
           for dir in $OUT/*/; do
             variant=$(basename $dir)
             echo "::group::$variant"
-            PYANN_LIB_PATH=$dir PYTHONPATH=src python benchmarks/bench_blas.py --variant $variant | grep '^{' | tee -a results.jsonl
+            PYANN_LIB_PATH=$dir PYTHONPATH=src python -X faulthandler benchmarks/bench_blas.py \
+              --variant $variant --out results.jsonl || echo "::error::$variant exited with status $?"
             echo "::endgroup::"
           done
           {

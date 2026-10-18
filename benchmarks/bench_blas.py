@@ -54,19 +54,24 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--variant", required=True, help="label for this build")
     parser.add_argument("--repeats", type=int, default=3)
+    parser.add_argument("--out", help="append JSON results to this file")
     args = parser.parse_args()
 
     info = pyann.backend_info()
     for name, n, n_in, hidden, n_out, batch, epochs in WORKLOADS:
         fit_s, predict_s = run(name, n, n_in, hidden, n_out, batch, epochs, args.repeats)
-        print(json.dumps({
+        line = json.dumps({
             "variant": args.variant,
             "blas": info["blas"],
             "cpus": os.cpu_count(),
             "workload": name,
             "fit_s": round(fit_s, 4),
             "predict_s": round(predict_s, 4),
-        }), flush=True)
+        })
+        print(line, flush=True)
+        if args.out:
+            with open(args.out, "a") as f:
+                f.write(line + "\n")
 
 
 if __name__ == "__main__":
