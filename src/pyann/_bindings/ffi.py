@@ -157,6 +157,20 @@ def _detect_backends(loaded_lib: object, lib_path: str) -> Dict[str, Optional[st
     return info
 
 
+def _preload_windows_dependencies(lib_path: Path) -> None:
+    """Load DLLs shipped next to libann (e.g. OpenBLAS) before libann itself.
+
+    cffi loads libann with a plain LoadLibrary, which does not search the
+    library's own directory for its dependencies. A DLL that is already loaded
+    is matched by name, so loading the bundled ones first resolves them.
+    """
+    lib_dir = lib_path.parent
+    os.add_dll_directory(str(lib_dir))
+    for dll in sorted(lib_dir.glob("*.dll")):
+        if dll != lib_path:
+            ctypes.WinDLL(str(dll))
+
+
 def _load_library() -> object:
     """Load the libann shared library.
 
@@ -168,6 +182,8 @@ def _load_library() -> object:
         return _lib
 
     lib_path = _find_library()
+    if sys.platform == "win32":
+        _preload_windows_dependencies(Path(lib_path))
     _lib = ffi.dlopen(lib_path)
     _backend_info = _detect_backends(_lib, lib_path)
 
