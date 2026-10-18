@@ -1,6 +1,6 @@
 [build-system]
-requires = ["setuptools>=61.0", "cffi>=1.15.0"]
-build-backend = "setuptools.build_meta"
+requires = ["scikit-build-core>=0.10"]
+build-backend = "scikit_build_core.build"
 
 [project]
 name = "pyann"
@@ -37,9 +37,16 @@ dev = [
 Homepage = "https://github.com/mseminatore/pyann"
 Repository = "https://github.com/mseminatore/pyann"
 
-[tool.setuptools.packages.find]
-where = ["src"]
-include = ["pyann*"]
+[tool.scikit-build]
+wheel.packages = ["src/pyann"]
+# The library is loaded with dlopen, not imported, so it is not tied to a
+# Python version: tag the wheel py3-none-<platform>
+wheel.py-api = "py3"
+cmake.build-type = "Release"
+
+[[tool.scikit-build.overrides]]
+if.platform-system = "^darwin"
+cmake.define = { USE_ACCELERATE = "ON", USE_METAL = "ON", CMAKE_OSX_DEPLOYMENT_TARGET = "12.0" }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

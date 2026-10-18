@@ -48,9 +48,12 @@ set_target_properties(ann PROPERTIES
     POSITION_INDEPENDENT_CODE ON
     C_STANDARD 99
     C_STANDARD_REQUIRED ON
-    VERSION ${PROJECT_VERSION}
-    SOVERSION 0
 )
+# Wheels can't hold the symlinks a versioned library needs, so only
+# versioned in development builds
+if(NOT SKBUILD)
+    set_target_properties(ann PROPERTIES VERSION ${PROJECT_VERSION} SOVERSION 0)
+endif()
 
 # Include directories
 target_include_directories(ann PUBLIC ${ANN_SOURCE_DIR})
@@ -174,22 +177,30 @@ if(USE_CUDA)
     target_link_libraries(ann PRIVATE CUDA::cudart CUDA::cublas)
 endif()
 
-# Copy library to pyann package directory
-set(PYANN_LIB_DIR "${CMAKE_CURRENT_SOURCE_DIR}/src/pyann/lib")
-file(MAKE_DIRECTORY ${PYANN_LIB_DIR})
+if(SKBUILD)
+    # Building a wheel: install the library into the pyann package
+    install(TARGETS ann
+        LIBRARY DESTINATION pyann/lib
+        RUNTIME DESTINATION pyann/lib
+    )
+    set(PYANN_LIB_DIR "wheel: pyann/lib")
+else()
+    # Development build: copy the library next to the sources
+    set(PYANN_LIB_DIR "${CMAKE_CURRENT_SOURCE_DIR}/src/pyann/lib")
+    file(MAKE_DIRECTORY ${PYANN_LIB_DIR})
 
-add_custom_command(TARGET ann POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:ann> ${PYANN_LIB_DIR}/
-    COMMAND ${CMAKE_COMMAND} -E create_symlink $<TARGET_FILE_NAME:ann> ${PYANN_LIB_DIR}/libann${CMAKE_SHARED_LIBRARY_SUFFIX}
-    COMMENT "Copying shared library to ${PYANN_LIB_DIR}"
-)
+    add_custom_command(TARGET ann POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:ann> ${PYANN_LIB_DIR}/
+        COMMAND ${CMAKE_COMMAND} -E create_symlink $<TARGET_FILE_NAME:ann> ${PYANN_LIB_DIR}/libann${CMAKE_SHARED_LIBRARY_SUFFIX}
+        COMMENT "Copying shared library to ${PYANN_LIB_DIR}"
+    )
 
-# Installation
-install(TARGETS ann
-    LIBRARY DESTINATION lib
-    RUNTIME DESTINATION bin
-    ARCHIVE DESTINATION lib
-)
+    install(TARGETS ann
+        LIBRARY DESTINATION lib
+        RUNTIME DESTINATION bin
+        ARCHIVE DESTINATION lib
+    )
+endif()
 
 # Print summary
 message(STATUS "")
