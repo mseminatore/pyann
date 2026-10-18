@@ -16,6 +16,7 @@ project(pyann_native VERSION 0.1.0 LANGUAGES C)
 # Options
 option(USE_BLAS "Use OpenBLAS for acceleration" OFF)
 option(USE_CBLAS "Use CBLAS for acceleration" OFF)
+option(USE_ACCELERATE "Use Apple Accelerate for BLAS (macOS only)" OFF)
 option(USE_METAL "Use Apple Metal GPU acceleration (macOS only)" OFF)
 option(USE_CUDA "Use NVIDIA CUDA GPU acceleration" OFF)
 
@@ -36,6 +37,7 @@ set(ANN_SOURCES
     ${ANN_SOURCE_DIR}/ann.c
     ${ANN_SOURCE_DIR}/tensor.c
     ${ANN_SOURCE_DIR}/json.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/native/pyann_info.c
 )
 
 # Create shared library
@@ -93,6 +95,23 @@ if(USE_CBLAS)
     else()
         message(WARNING "CBLAS not found at ${CBLAS_ROOT}")
     endif()
+elseif(USE_ACCELERATE)
+    if(NOT APPLE)
+        message(FATAL_ERROR "USE_ACCELERATE is only supported on macOS")
+    endif()
+    # libann includes <cblas.h>; point it at Accelerate's copy.
+    execute_process(COMMAND xcrun --show-sdk-path OUTPUT_VARIABLE MACOS_SDK
+                    OUTPUT_STRIP_TRAILING_WHITESPACE)
+    set(VECLIB_HEADERS "${MACOS_SDK}/System/Library/Frameworks/Accelerate.framework/Frameworks/vecLib.framework/Headers")
+    if(NOT EXISTS "${VECLIB_HEADERS}/cblas.h")
+        message(FATAL_ERROR "Accelerate cblas.h not found at ${VECLIB_HEADERS}")
+    endif()
+    # Accelerate names cblas_saxpby catlas_saxpby (same signature)
+    target_compile_definitions(ann PRIVATE USE_BLAS=1 cblas_saxpby=catlas_saxpby)
+    target_include_directories(ann PRIVATE ${VECLIB_HEADERS})
+    # The legacy CBLAS header is marked deprecated on macOS 13.3+
+    target_compile_options(ann PRIVATE -Wno-deprecated-declarations)
+    target_link_libraries(ann PRIVATE "-framework Accelerate")
 elseif(USE_BLAS)
     target_compile_definitions(ann PRIVATE USE_BLAS=1)
     
@@ -112,6 +131,19 @@ elseif(USE_BLAS)
             endif()
         endif()
     endif()
+endif()
+
+# Report the BLAS in use through pyann_blas_backend()
+if(USE_CBLAS)
+    set(PYANN_BLAS_NAME "cblas")
+elseif(USE_ACCELERATE)
+    set(PYANN_BLAS_NAME "accelerate")
+elseif(USE_BLAS)
+    set(PYANN_BLAS_NAME "openblas")
+endif()
+if(PYANN_BLAS_NAME)
+    set_source_files_properties(src/native/pyann_info.c PROPERTIES
+        COMPILE_DEFINITIONS "PYANN_BLAS_NAME=\"${PYANN_BLAS_NAME}\"")
 endif()
 
 # Hypertune library (optional)
@@ -165,6 +197,7 @@ message(STATUS "pyann native library configuration:")
 message(STATUS "  ANN source: ${ANN_SOURCE_DIR}")
 message(STATUS "  BLAS: ${USE_BLAS}")
 message(STATUS "  CBLAS: ${USE_CBLAS}")
+message(STATUS "  Accelerate: ${USE_ACCELERATE}")
 message(STATUS "  Metal: ${USE_METAL}")
 message(STATUS "  CUDA: ${USE_CUDA}")
 message(STATUS "  Output: ${PYANN_LIB_DIR}")

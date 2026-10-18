@@ -118,7 +118,15 @@ def _detect_backends(loaded_lib: object, lib_path: str) -> Dict[str, Optional[st
         "cblas_isa": None,
     }
 
-    # Probe for CBLAS
+    # Build-time BLAS name (absent in libraries built before pyann_info.c)
+    try:
+        name = loaded_lib.pyann_blas_backend()
+        if name != ffi.NULL:
+            info["blas"] = ffi.string(name).decode()
+    except (FFIError, AttributeError):
+        pass
+
+    # Probe for the bundled CBLAS, which also reports its configuration
     try:
         loaded_lib.cblas_init(-1)
         info["blas"] = "cblas"

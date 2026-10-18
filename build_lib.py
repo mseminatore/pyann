@@ -36,6 +36,7 @@ def build_library(
     build_type: str = "Release",
     use_blas: bool = False,
     use_cblas: bool = False,
+    use_accelerate: bool = False,
     use_metal: bool = False,
     use_cuda: bool = False,
 ):
@@ -55,6 +56,8 @@ def build_library(
     
     if use_cblas:
         cmake_args.append("-DUSE_CBLAS=ON")
+    elif use_accelerate:
+        cmake_args.append("-DUSE_ACCELERATE=ON")
     elif use_blas:
         cmake_args.append("-DUSE_BLAS=ON")
 
@@ -90,6 +93,7 @@ def main():
     parser.add_argument("--debug", action="store_true", help="Build debug version")
     parser.add_argument("--blas", action="store_true", help="Enable OpenBLAS")
     parser.add_argument("--cblas", action="store_true", help="Enable CBLAS")
+    parser.add_argument("--accelerate", action="store_true", help="Use Apple Accelerate for BLAS (macOS only)")
     parser.add_argument("--metal", action="store_true", help="Enable Apple Metal GPU acceleration (macOS only)")
     parser.add_argument("--cuda", action="store_true", help="Enable NVIDIA CUDA GPU acceleration")
     parser.add_argument("--clean", action="store_true", help="Clean build directory first")
@@ -110,6 +114,7 @@ def main():
         build_type="Debug" if args.debug else "Release",
         use_blas=args.blas,
         use_cblas=args.cblas,
+        use_accelerate=args.accelerate,
         use_metal=args.metal,
         use_cuda=args.cuda,
     )

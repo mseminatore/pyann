@@ -66,6 +66,9 @@ typedef real(*LRSchedulerFunc)(unsigned epoch, real base_lr, void *user_data);
 // Error callback type
 typedef void (*ErrorLogCallback)(int error_code, const char *error_message, const char *function_name);
 
+// Build info (pyann_info.c)
+const char *pyann_blas_backend(void);
+
 // CBLAS (only present when built with USE_CBLAS)
 void cblas_init(int threads);
 void cblas_shutdown(void);
