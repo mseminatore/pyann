@@ -127,7 +127,7 @@ if(USE_METAL)
     target_compile_definitions(ann PRIVATE USE_METAL=1)
     target_sources(ann PRIVATE ${ANN_SOURCE_DIR}/tensor_metal.m)
     set_source_files_properties(${ANN_SOURCE_DIR}/tensor_metal.m PROPERTIES
-        COMPILE_FLAGS "-x objective-c"
+        COMPILE_FLAGS "-x objective-c -fobjc-arc"
         LANGUAGE C
     )
     target_link_libraries(ann PRIVATE "-framework Metal" "-framework Foundation" "-framework MetalPerformanceShaders")
