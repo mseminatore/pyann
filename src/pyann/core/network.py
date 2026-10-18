@@ -3,7 +3,7 @@
 from typing import Optional, Union, List, Tuple, TYPE_CHECKING
 from pathlib import Path
 
-from pyann._bindings.ffi import ffi, lib
+from pyann._bindings.ffi import ffi, lib, gpu_enabled
 from pyann.core.layers import Layer, Dense, Input, parse_layer
 from pyann.core.tensor import Tensor
 from pyann.activations import Activation
@@ -45,6 +45,9 @@ class Sequential:
         name: Optional model name
     """
     
+    # Class-level default so models created via __new__ (load/load_onnx) have it
+    _gpu_uploaded = False
+
     def __init__(
         self,
         layers: Optional[List[Layer]] = None,
@@ -242,7 +245,8 @@ class Sequential:
         if lr_scheduler is not None:
             self._setup_lr_scheduler(lr_scheduler)
         
-        # Train
+        # Train (on the GPU when pyann.enable_gpu() succeeded)
+        self._gpu_upload()
         loss = lib.ann_train_network(self._ptr, x_tensor._ptr, y_tensor._ptr, n_samples)
         if loss == 0.0:
             raise NetworkError("Training failed")
@@ -258,6 +262,16 @@ class Sequential:
         
         return history
     
+    def _gpu_upload(self) -> None:
+        """Upload weights to the GPU if a backend is active (else a no-op).
+
+        Training and batch inference only use the GPU for uploaded networks.
+        On upload failure the model keeps using the CPU path.
+        """
+        if self._gpu_uploaded or not gpu_enabled():
+            return
+        self._gpu_uploaded = lib.ann_gpu_upload_network(self._ptr) == 0
+
     def _setup_lr_scheduler(self, scheduler: LRScheduler) -> None:
         """Configure a learning rate scheduler."""
         if isinstance(scheduler, StepDecay):
@@ -298,36 +312,31 @@ class Sequential:
         n_samples = shape[0]
         output_size = self._layers[-1].units
         
+        self._gpu_upload()
+
         if has_numpy():
             import numpy as np
+            x_f32 = np.ascontiguousarray(x_arr, dtype=np.float32)
             results = np.zeros((n_samples, output_size), dtype=np.float32)
-            
-            for i in range(n_samples):
-                row = x_arr[i]
-                inputs = ffi.cast("real *", row.ctypes.data)
-                outputs = ffi.new("real[]", output_size)
-                
-                result = lib.ann_predict(self._ptr, inputs, outputs)
-                raise_for_error_code(result, "Prediction failed")
-                
-                for j in range(output_size):
-                    results[i, j] = outputs[j]
-            
+            result = lib.ann_predict_batch(
+                self._ptr,
+                ffi.cast("real *", x_f32.ctypes.data),
+                ffi.cast("real *", results.ctypes.data),
+                n_samples,
+            )
+            raise_for_error_code(result, "Prediction failed")
             return results
         else:
-            results = []
-            for i in range(n_samples):
-                row = x_arr[i] if isinstance(x_arr[i], list) else list(x_arr[i])
-                inputs = ffi.new("real[]", row)
-                outputs = ffi.new("real[]", output_size)
-                
-                result = lib.ann_predict(self._ptr, inputs, outputs)
-                raise_for_error_code(result, "Prediction failed")
-                
-                results.append([outputs[j] for j in range(output_size)])
-            
-            return results
-    
+            flat = [float(v) for row in x_arr for v in row]
+            inputs = ffi.new("real[]", flat)
+            outputs = ffi.new("real[]", n_samples * output_size)
+            result = lib.ann_predict_batch(self._ptr, inputs, outputs, n_samples)
+            raise_for_error_code(result, "Prediction failed")
+            return [
+                [outputs[i * output_size + j] for j in range(output_size)]
+                for i in range(n_samples)
+            ]
+
     def evaluate(self, x: ArrayLike, y: ArrayLike) -> float:
         """Evaluate model accuracy on test data.
         
@@ -606,4 +615,6 @@ class Sequential:
         """Free the C network."""
         if hasattr(self, '_ptr') and self._ptr is not None:
             if self._ptr != ffi.NULL:
+                if self._gpu_uploaded:
+                    lib.ann_gpu_free_network(self._ptr)
                 lib.ann_free_network(self._ptr)

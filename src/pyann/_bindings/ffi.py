@@ -1,5 +1,6 @@
 """CFFI FFI setup and library loading."""
 
+import ctypes
 import os
 import sys
 from pathlib import Path
@@ -106,11 +107,12 @@ def _find_library() -> str:
     )
 
 
-def _detect_backends(loaded_lib: object) -> Dict[str, Optional[str]]:
+def _detect_backends(loaded_lib: object, lib_path: str) -> Dict[str, Optional[str]]:
     """Detect which acceleration backends are compiled into the library."""
     info: Dict[str, Optional[str]] = {
         "blas": None,
         "gpu": None,
+        "gpu_active": None,
         "cblas_config": None,
         "cblas_corename": None,
         "cblas_isa": None,
@@ -135,12 +137,14 @@ def _detect_backends(loaded_lib: object) -> Dict[str, Optional[str]]:
     except (FFIError, AttributeError):
         pass
 
-    # Probe for GPU backends via backend-specific symbols
-    try:
-        loaded_lib.tensor_metal_init
-        info["gpu"] = "metal"
-    except (FFIError, AttributeError):
-        pass
+    # Probe for GPU backends compiled into the library. Each backend exports
+    # a vtable symbol; it is present whether or not a device is available.
+    # cffi can't look up data symbols without a declaration, so use ctypes.
+    probe = ctypes.CDLL(lib_path)
+    for name in ("metal", "cuda"):
+        if hasattr(probe, f"{name}_backend"):
+            info["gpu"] = name
+            break
 
     return info
 
@@ -157,7 +161,7 @@ def _load_library() -> object:
 
     lib_path = _find_library()
     _lib = ffi.dlopen(lib_path)
-    _backend_info = _detect_backends(_lib)
+    _backend_info = _detect_backends(_lib, lib_path)
 
     return _lib
 
@@ -166,11 +170,35 @@ def get_backend_info() -> Dict[str, Optional[str]]:
     """Return detected acceleration backend information.
 
     Returns:
-        Dict with keys: blas, gpu, cblas_config, cblas_corename, cblas_isa.
+        Dict with keys: blas, gpu (backend compiled in), gpu_active
+        (backend in use after enable_gpu(), else None), cblas_config, cblas_corename, cblas_isa.
         Values are None when the corresponding backend is not compiled in.
     """
     _load_library()
     return dict(_backend_info)
+
+
+def enable_gpu() -> bool:
+    """Initialize the GPU backend compiled into the library, if any.
+
+    Safe to call repeatedly. When no GPU backend is compiled in or no device
+    is available, returns False and libann keeps using its CPU path (CBLAS
+    if the library was built with it).
+
+    Returns:
+        True if a GPU backend is now active.
+    """
+    _load_library()
+    if _backend_info["gpu_active"] is None and _backend_info["gpu"] is not None:
+        if _lib.ann_gpu_init():
+            _backend_info["gpu_active"] = _backend_info["gpu"]
+    return _backend_info["gpu_active"] is not None
+
+
+def gpu_enabled() -> bool:
+    """Return True if enable_gpu() has activated a GPU backend."""
+    _load_library()
+    return _backend_info["gpu_active"] is not None
 
 
 @property

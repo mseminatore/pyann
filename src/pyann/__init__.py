@@ -12,7 +12,11 @@ from pyann.core.layers import Dense, Input
 from pyann.optimizers import Optimizer, SGD, Momentum, RMSProp, AdaGrad, Adam
 from pyann.losses import Loss
 from pyann.activations import Activation
-from pyann._bindings.ffi import get_backend_info as backend_info
+from pyann._bindings.ffi import (
+    get_backend_info as backend_info,
+    enable_gpu,
+    gpu_enabled,
+)
 
 __all__ = [
     "Sequential",
@@ -27,4 +31,6 @@ __all__ = [
     "Loss",
     "Activation",
     "backend_info",
+    "enable_gpu",
+    "gpu_enabled",
 ]

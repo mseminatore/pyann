@@ -75,6 +75,10 @@ const char *cblas_get_isa_features(void);
 
 // GPU (only present when built with USE_METAL or USE_CUDA)
 int ann_gpu_init(void);
+int ann_gpu_upload_network(PNetwork pnet);
+void ann_gpu_free_network(PNetwork pnet);
+void ann_gpu_sync_weights(PNetwork pnet);
+int ann_predict_batch(const PNetwork pnet, const real *inputs, real *outputs, int batch_size);
 int tensor_metal_init(void);
 
 // Network creation and destruction
