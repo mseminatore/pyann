@@ -35,14 +35,15 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libopenblas-dev
-          # libann looks for include/cblas.h and lib/libopenblas under one root
-          sudo mkdir -p /opt/OpenBLAS/include /opt/OpenBLAS/lib
-          for h in cblas.h openblas_config.h f77blas.h lapacke_mangling.h; do
-            f=$(dpkg -L libopenblas-dev | grep "/$h\$" | head -1 || true)
-            [ -n "$f" ] && sudo ln -sf "$f" /opt/OpenBLAS/include/$h
-          done
-          sudo ln -sf "$(dpkg -L libopenblas-dev | grep '/libopenblas\.so$' | head -1)" /opt/OpenBLAS/lib/libopenblas.so
-          ls -l /opt/OpenBLAS/include /opt/OpenBLAS/lib
+          # libann looks for include/cblas.h and lib/libopenblas under one root.
+          # libopenblas-dev is a meta-package, so locate the real files with find.
+          hdr=$(find /usr/include -name cblas.h -path '*openblas*' | head -1)
+          lib=$(find /usr/lib -name 'libopenblas.so' | head -1)
+          echo "header: $hdr  library: $lib"
+          sudo mkdir -p /opt/OpenBLAS/lib
+          sudo ln -sfn "$(dirname "$hdr")" /opt/OpenBLAS/include
+          sudo ln -sf "$lib" /opt/OpenBLAS/lib/libopenblas.so
+          ls -lL /opt/OpenBLAS/include/cblas.h /opt/OpenBLAS/lib/libopenblas.so
 
       - name: Install OpenBLAS (macOS)
         if: runner.os == 'macOS'
