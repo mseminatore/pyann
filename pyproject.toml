@@ -43,10 +43,29 @@ wheel.packages = ["src/pyann"]
 # Python version: tag the wheel py3-none-<platform>
 wheel.py-api = "py3"
 cmake.build-type = "Release"
+# Ship only the ann sources the build needs, not its tests, docs or examples
+sdist.exclude = [
+    "ann/.github",
+    "ann/data",
+    "ann/docs",
+    "ann/examples",
+    "ann/tests",
+    "ann/testy",
+    "ann/CLAUDE.md",
+]
 
 [[tool.scikit-build.overrides]]
 if.platform-system = "^darwin"
 cmake.define = { USE_ACCELERATE = "ON", USE_METAL = "ON", CMAKE_OSX_DEPLOYMENT_TARGET = "12.0" }
+
+[tool.cibuildwheel]
+# The wheel is tagged py3-none, so one interpreter per platform is enough
+build = ["cp39-manylinux*", "cp39-macosx*", "cp39-win*"]
+test-requires = ["pytest", "numpy"]
+test-command = "pytest {project}/tests"
+
+[tool.cibuildwheel.macos]
+environment = { MACOSX_DEPLOYMENT_TARGET = "12.0" }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
