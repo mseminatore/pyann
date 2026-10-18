@@ -1,0 +1,95 @@
+name: BLAS benchmark
+
+# Compares libann built with no BLAS, the project's CBLAS, OpenBLAS (and Accelerate on macOS)
+on:
+  pull_request:
+    paths:
+      - benchmarks/**
+      - .github/workflows/blas-bench.yml
+  workflow_dispatch:
+
+jobs:
+  bench:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: macos-arm64,   os: macos-14 }
+          - { name: linux-x86_64,  os: ubuntu-latest }
+          - { name: linux-aarch64, os: ubuntu-24.04-arm }
+    env:
+      OUT: ${{ github.workspace }}/bench-libs
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install OpenBLAS (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libopenblas-dev
+          # libann looks for include/cblas.h and lib/libopenblas under one root
+          sudo mkdir -p /opt/OpenBLAS/include /opt/OpenBLAS/lib
+          for h in cblas.h openblas_config.h f77blas.h lapacke_mangling.h; do
+            f=$(dpkg -L libopenblas-dev | grep "/$h\$" | head -1 || true)
+            [ -n "$f" ] && sudo ln -sf "$f" /opt/OpenBLAS/include/$h
+          done
+          sudo ln -sf "$(dpkg -L libopenblas-dev | grep '/libopenblas\.so$' | head -1)" /opt/OpenBLAS/lib/libopenblas.so
+          ls -l /opt/OpenBLAS/include /opt/OpenBLAS/lib
+
+      - name: Install OpenBLAS (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install openblas
+          sudo mkdir -p /opt
+          sudo ln -sfn "$(brew --prefix openblas)" /opt/OpenBLAS
+
+      - name: Build and install CBLAS from main
+        run: |
+          git clone --depth 1 https://github.com/mseminatore/cblas /tmp/cblas
+          echo "CBLAS commit: $(git -C /tmp/cblas rev-parse HEAD)"
+          # PIC is required to link the static library into libann's shared library
+          cmake -S /tmp/cblas -B /tmp/cblas/build -DCMAKE_BUILD_TYPE=Release \
+                -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DCMAKE_INSTALL_PREFIX=/opt/cblas
+          cmake --build /tmp/cblas/build --target cblas --config Release
+          sudo cmake --install /tmp/cblas/build --config Release
+
+      - name: Build libann variants
+        run: |
+          build() {  # name, cmake flags...
+            name=$1; shift
+            cmake -S . -B build-$name -DCMAKE_BUILD_TYPE=Release "$@"
+            cmake --build build-$name --config Release
+            mkdir -p $OUT/$name
+            cp -L src/pyann/lib/libann.* $OUT/$name/
+          }
+          build none
+          build cblas -DUSE_CBLAS=ON
+          build openblas -DUSE_BLAS=ON
+          if [ "$RUNNER_OS" = macOS ]; then build accelerate -DUSE_ACCELERATE=ON; fi
+
+      - name: Run benchmarks
+        run: |
+          python -m pip install numpy cffi
+          for dir in $OUT/*/; do
+            variant=$(basename $dir)
+            echo "::group::$variant"
+            PYANN_LIB_PATH=$dir PYTHONPATH=src python benchmarks/bench_blas.py --variant $variant | grep '^{' | tee -a results.jsonl
+            echo "::endgroup::"
+          done
+          {
+            echo "## ${{ matrix.name }} ($(python -c 'import os; print(os.cpu_count())') CPUs)"
+            python benchmarks/summarize.py < results.jsonl
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bench-${{ matrix.name }}
+          path: results.jsonl
