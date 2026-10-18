@@ -16,6 +16,8 @@ project(pyann_native VERSION 0.1.0 LANGUAGES C)
 # Options
 option(USE_BLAS "Use OpenBLAS for acceleration" OFF)
 option(USE_CBLAS "Use CBLAS for acceleration" OFF)
+option(USE_METAL "Use Apple Metal GPU acceleration (macOS only)" OFF)
+option(USE_CUDA "Use NVIDIA CUDA GPU acceleration" OFF)
 
 # Find the ann source (expects it as a submodule or sibling directory)
 set(ANN_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/ann" CACHE PATH "Path to ann source directory")
@@ -75,14 +77,15 @@ endif()
 # BLAS support
 if(USE_CBLAS)
     target_compile_definitions(ann PRIVATE USE_CBLAS=1 USE_BLAS=1)
-    
+    set_target_properties(ann PROPERTIES C_STANDARD 11)
+
     # Find CBLAS
     if(WIN32)
         set(CBLAS_ROOT "C:/opt/cblas" CACHE PATH "CBLAS installation directory")
     else()
         set(CBLAS_ROOT "/opt/cblas" CACHE PATH "CBLAS installation directory")
     endif()
-    
+
     if(EXISTS "${CBLAS_ROOT}/include/cblas.h")
         target_include_directories(ann PRIVATE ${CBLAS_ROOT}/include)
         target_link_directories(ann PRIVATE ${CBLAS_ROOT}/lib)
@@ -116,12 +119,36 @@ if(EXISTS "${ANN_SOURCE_DIR}/ann_hypertune.c")
     target_sources(ann PRIVATE ${ANN_SOURCE_DIR}/ann_hypertune.c)
 endif()
 
+# Metal GPU support (macOS only)
+if(USE_METAL)
+    if(NOT APPLE)
+        message(FATAL_ERROR "USE_METAL is only supported on macOS/Apple platforms")
+    endif()
+    target_compile_definitions(ann PRIVATE USE_METAL=1)
+    target_sources(ann PRIVATE ${ANN_SOURCE_DIR}/tensor_metal.m)
+    set_source_files_properties(${ANN_SOURCE_DIR}/tensor_metal.m PROPERTIES
+        COMPILE_FLAGS "-x objective-c"
+        LANGUAGE C
+    )
+    target_link_libraries(ann PRIVATE "-framework Metal" "-framework Foundation" "-framework MetalPerformanceShaders")
+endif()
+
+# CUDA GPU support
+if(USE_CUDA)
+    enable_language(CUDA)
+    find_package(CUDAToolkit REQUIRED)
+    target_compile_definitions(ann PRIVATE USE_CUDA=1)
+    target_sources(ann PRIVATE ${ANN_SOURCE_DIR}/tensor_cuda.cu ${ANN_SOURCE_DIR}/shaders.cu)
+    target_link_libraries(ann PRIVATE CUDA::cudart CUDA::cublas)
+endif()
+
 # Copy library to pyann package directory
 set(PYANN_LIB_DIR "${CMAKE_CURRENT_SOURCE_DIR}/src/pyann/lib")
 file(MAKE_DIRECTORY ${PYANN_LIB_DIR})
 
 add_custom_command(TARGET ann POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:ann> ${PYANN_LIB_DIR}/
+    COMMAND ${CMAKE_COMMAND} -E create_symlink $<TARGET_FILE_NAME:ann> ${PYANN_LIB_DIR}/libann${CMAKE_SHARED_LIBRARY_SUFFIX}
     COMMENT "Copying shared library to ${PYANN_LIB_DIR}"
 )
 
@@ -138,5 +165,7 @@ message(STATUS "pyann native library configuration:")
 message(STATUS "  ANN source: ${ANN_SOURCE_DIR}")
 message(STATUS "  BLAS: ${USE_BLAS}")
 message(STATUS "  CBLAS: ${USE_CBLAS}")
+message(STATUS "  Metal: ${USE_METAL}")
+message(STATUS "  CUDA: ${USE_CUDA}")
 message(STATUS "  Output: ${PYANN_LIB_DIR}")
 message(STATUS "")

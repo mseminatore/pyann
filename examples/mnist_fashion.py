@@ -24,7 +24,7 @@ from pathlib import Path
 
 import numpy as np
 
-from pyann import Sequential, Dense, Adam, Loss, Activation
+from pyann import Sequential, Dense, Adam, Loss, Activation, backend_info
 from pyann.callbacks import ExponentialDecay
 
 
@@ -122,7 +122,16 @@ def main():
                         help="Show a sample image as ASCII art")
     
     args = parser.parse_args()
-    
+
+    # Print backend configuration
+    info = backend_info()
+    blas = info["blas"] or "none (scalar)"
+    gpu = info["gpu"] or "none"
+    config = f"BLAS: {blas}, GPU: {gpu}"
+    if info["cblas_isa"]:
+        config += f", ISA: {info['cblas_isa']}"
+    print(f"Backend: {config}")
+
     # Check if data files exist
     if not Path(args.train_file).exists():
         print(f"Error: Training file not found: {args.train_file}")
