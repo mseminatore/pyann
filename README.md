@@ -8,6 +8,7 @@ Python wrapper for the [libann](https://github.com/mseminatore/ann) neural netwo
 - **Multiple optimizers**: SGD, Momentum, RMSProp, AdaGrad, Adam
 - **Activation functions**: Sigmoid, ReLU, LeakyReLU, Tanh, Softsign, Softmax
 - **Loss functions**: MSE, Categorical Cross-Entropy
+- **Online training**: `train_on_batch()` for streaming data, fine-tuning and custom training loops
 - **Learning rate schedulers**: Step decay, Exponential decay, Cosine annealing
 - **Hyperparameter tuning**: Grid search, Random search, Bayesian optimization, TPE (pure-Python searches built on `Sequential`; libann's native hypertuner is not exposed)
 - **NumPy optional**: Works with Python lists, optimized for NumPy arrays
@@ -153,6 +154,22 @@ stopping = EarlyStopping(patience=10, min_delta=0.0001)
 model.fit(X, y, epochs=500, callbacks=[stopping])
 ```
 
+### Online Training and Fine-Tuning
+
+`train_on_batch()` runs one training step on a mini-batch and returns its loss. Unlike `fit()` it keeps the weights and the optimizer state (such as Adam's momentum) between calls, so it works for streaming data, custom training loops, and fine-tuning a loaded model.
+
+```python
+model = Sequential.load('model.nna')        # or a model you just built and compiled
+
+for x_batch, y_batch in stream():           # any source of (samples, features) batches
+    loss = model.train_on_batch(x_batch, y_batch)
+
+model.end_online_training()                 # optional: dropout off, GPU weights refreshed
+model.save('model_finetuned.nna')
+```
+
+Batches can vary in size, `predict()` and `evaluate()` work between steps, and `fit()` ends any open session itself. The learning rate scheduler and callbacks only apply to `fit()`. Shapes are checked up front: `x` must be `(samples, input_size)` and `y` `(samples, output_size)`, and a mismatch raises `ValueError`.
+
 ### Hyperparameter Tuning
 
 ```python
@@ -257,6 +274,8 @@ Methods:
 - `add(layer)` - Add a layer
 - `compile(optimizer, loss, learning_rate, weight_decay, l1_regularization, gradient_clip, weight_init, convergence, dropout)` - Configure training (see below)
 - `fit(x, y, epochs, batch_size, ...)` - Train the model
+- `train_on_batch(x, y)` - One training step on a mini-batch; returns the loss
+- `end_online_training()` - End the online session started by `train_on_batch()`
 - `predict(x)` - Generate predictions
 - `evaluate(x, y)` - Compute accuracy
 - `confusion_matrix(x, y)` - Compute TP/FP/TN/FN and MCC (binary classification)
@@ -357,7 +376,6 @@ All accept a `HyperparamSpace` and return `(best_result, all_results)` from `run
 
 pyann covers libann's training, inference, persistence, regularization and GPU features. These parts of libann's C API have no Python equivalent yet:
 
-- **Online / incremental training** (`ann_train_begin` / `ann_train_step` / `ann_train_end`): streaming data, fine-tuning a loaded model, single-sample updates. Use `fit()` for now.
 - **libann's native hypertuner** (`ann_hypertune.h`). `pyann.hypertune` is a separate Python implementation, so its search spaces and results differ from the C one (for example topology names, per-layer activation search, and the Gaussian-process settings).
 - **Error-log callbacks**: errors surface as Python exceptions instead.
 - **Tensor math** (gemm, elementwise ops and so on): use NumPy.

@@ -24,6 +24,39 @@ if TYPE_CHECKING:
     import numpy as np
 
 
+def _batch_buffer(data: ArrayLike, columns: int, name: str):
+    """Convert one mini-batch to a C float buffer, checking its shape.
+    
+    Returns (keepalive, rows, pointer); keep the first element referenced for
+    as long as the pointer is in use.
+    """
+    arr = to_array(data)
+    
+    if has_numpy():
+        if arr.ndim == 1:
+            arr = arr.reshape(1, -1)
+        if arr.ndim != 2:
+            raise ValueError(
+                f"{name} must be 1-D (one sample) or 2-D (samples x features), "
+                f"got {arr.ndim}-D"
+            )
+        rows, cols = arr.shape
+        if rows == 0:
+            raise ValueError(f"{name} has no samples")
+        if cols != columns:
+            raise ValueError(f"{name} has {cols} columns but the network expects {columns}")
+        return arr, rows, ffi.cast("real *", arr.ctypes.data)
+    
+    rows = len(arr)
+    if rows == 0 or any(len(row) == 0 for row in arr):
+        raise ValueError(f"{name} has no samples")
+    for row in arr:
+        if len(row) != columns:
+            raise ValueError(f"{name} has a row of {len(row)} values but the network expects {columns}")
+    buffer = ffi.new("real[]", [v for row in arr for v in row])
+    return buffer, rows, buffer
+
+
 class Sequential:
     """Sequential neural network model.
     
@@ -48,6 +81,7 @@ class Sequential:
     
     # Class-level defaults so models created via __new__ (load/load_onnx) have them
     _gpu_uploaded = False
+    _online_active = False
     _gradient_clip: Optional[float] = None
     _weight_init: Optional[WeightInit] = None
     _convergence: Optional[float] = None
@@ -273,6 +307,7 @@ class Sequential:
             Dictionary with training history
         """
         self._build()
+        self.end_online_training()
         
         # Convert data to tensors
         x_arr = to_array(x)
@@ -312,6 +347,70 @@ class Sequential:
             history["val_accuracy"] = val_accuracy
         
         return history
+    
+    def train_on_batch(self, x: ArrayLike, y: ArrayLike) -> float:
+        """Run one training step on a single mini-batch (online training).
+        
+        Unlike fit(), this keeps the weights and the optimizer state (for
+        example Adam's momentum) between calls, so it suits streaming data,
+        fine-tuning a loaded model, and custom training loops. The learning
+        rate scheduler and callbacks only apply to fit().
+        
+        The first call starts an online training session, which stays open
+        across calls. predict() and evaluate() work during a session. Call
+        end_online_training() when you are done (fit() does so itself).
+        
+        Args:
+            x: Inputs, shape (samples, features); a 1-D array is one sample
+            y: Targets, shape (samples, outputs); a 1-D array is one sample
+            
+        Returns:
+            Loss for this mini-batch
+            
+        Raises:
+            ValueError: If the shapes of x and y don't match the network
+        """
+        self._build()
+        
+        n_layers = lib.ann_get_layer_count(self._ptr)
+        in_units = lib.ann_get_layer_nodes(self._ptr, 0)
+        out_units = lib.ann_get_layer_nodes(self._ptr, n_layers - 1)
+        
+        if (self._loss == Loss.CATEGORICAL_CROSS_ENTROPY and
+                lib.ann_get_layer_activation(self._ptr, n_layers - 1) not in
+                (lib.ACTIVATION_SOFTMAX, lib.ACTIVATION_SIGMOID)):
+            raise ValueError(
+                "categorical cross-entropy needs a softmax or sigmoid output layer"
+            )
+        
+        # libann copies batch_size * units values from these buffers without
+        # checking their size, so the shapes must be verified here
+        x_keep, x_rows, x_ptr = _batch_buffer(x, in_units, "x")
+        y_keep, y_rows, y_ptr = _batch_buffer(y, out_units, "y")
+        if x_rows != y_rows:
+            raise ValueError(f"x has {x_rows} samples but y has {y_rows}")
+        
+        if not self._online_active:
+            result = lib.ann_train_begin(self._ptr)
+            raise_for_error_code(result, "Failed to begin online training")
+            self._online_active = True
+        
+        return float(lib.ann_train_step(self._ptr, x_ptr, y_ptr, x_rows))
+    
+    def end_online_training(self) -> "Sequential":
+        """End the online training session started by train_on_batch().
+        
+        Turns dropout off and, when the GPU is enabled, re-uploads the updated
+        weights. Does nothing if no session is open. A later train_on_batch()
+        starts a new session and keeps the weights and optimizer state.
+        
+        Returns:
+            self for method chaining
+        """
+        if self._online_active:
+            lib.ann_train_end(self._ptr)
+            self._online_active = False
+        return self
     
     def _gpu_upload(self) -> None:
         """Upload weights to the GPU if a backend is active (else a no-op).
