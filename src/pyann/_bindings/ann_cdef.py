@@ -28,7 +28,8 @@ typedef enum {
 // Loss function types
 typedef enum {
     LOSS_MSE,
-    LOSS_CATEGORICAL_CROSS_ENTROPY
+    LOSS_CATEGORICAL_CROSS_ENTROPY,
+    LOSS_DEFAULT = 0        // LOSS_MSE
 } Loss_type;
 
 // Optimizer types
@@ -37,7 +38,8 @@ typedef enum {
     OPT_MOMENTUM,
     OPT_RMSPROP,
     OPT_ADAGRAD,
-    OPT_ADAM
+    OPT_ADAM,
+    OPT_DEFAULT = 4         // OPT_ADAM
 } Optimizer_type;
 
 // Weight initialization types
@@ -45,7 +47,8 @@ typedef enum {
     WEIGHT_INIT_UNIFORM,
     WEIGHT_INIT_XAVIER,
     WEIGHT_INIT_HE,
-    WEIGHT_INIT_AUTO
+    WEIGHT_INIT_AUTO,
+    WEIGHT_INIT_DEFAULT = 3 // WEIGHT_INIT_AUTO
 } Weight_init_type;
 
 // Error codes
@@ -82,7 +85,6 @@ int ann_gpu_upload_network(PNetwork pnet);
 void ann_gpu_free_network(PNetwork pnet);
 void ann_gpu_sync_weights(PNetwork pnet);
 int ann_predict_batch(const PNetwork pnet, const real *inputs, real *outputs, int batch_size);
-int tensor_metal_init(void);
 
 // Network creation and destruction
 PNetwork ann_make_network(Optimizer_type opt, Loss_type loss_type);

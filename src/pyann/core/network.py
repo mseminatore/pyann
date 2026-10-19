@@ -9,6 +9,7 @@ from pyann.core.tensor import Tensor
 from pyann.activations import Activation
 from pyann.losses import Loss, parse_loss
 from pyann.optimizers import Optimizer, parse_optimizer, OptimizerType
+from pyann.weight_init import WeightInit, parse_weight_init
 from pyann.callbacks import (
     LRScheduler, StepDecay, ExponentialDecay, CosineAnnealing,
     EarlyStopping
@@ -45,8 +46,12 @@ class Sequential:
         name: Optional model name
     """
     
-    # Class-level default so models created via __new__ (load/load_onnx) have it
+    # Class-level defaults so models created via __new__ (load/load_onnx) have them
     _gpu_uploaded = False
+    _gradient_clip: Optional[float] = None
+    _weight_init: Optional[WeightInit] = None
+    _convergence: Optional[float] = None
+    _dropout: Optional[float] = None
 
     def __init__(
         self,
@@ -102,7 +107,11 @@ class Sequential:
         loss: Union[str, Loss, None] = None,
         learning_rate: Optional[float] = None,
         weight_decay: Optional[float] = None,
-        l1_regularization: Optional[float] = None
+        l1_regularization: Optional[float] = None,
+        gradient_clip: Optional[float] = None,
+        weight_init: Union[str, WeightInit, None] = None,
+        convergence: Optional[float] = None,
+        dropout: Optional[float] = None
     ) -> "Sequential":
         """Configure the model for training.
         
@@ -112,10 +121,27 @@ class Sequential:
             learning_rate: Override the optimizer's learning rate
             weight_decay: L2 regularization coefficient (0 = disabled)
             l1_regularization: L1 regularization coefficient (0 = disabled)
+            gradient_clip: Clip gradients to [-value, value] (0 = disabled).
+                Helps with exploding gradients; 1.0-5.0 is typical.
+            weight_init: Weight initialization: 'uniform', 'xavier', 'he' or
+                'auto' (default: chosen per layer from its activation)
+            convergence: Stop training early once the average loss falls below
+                this value (libann's default is 0.01)
+            dropout: Default dropout rate for hidden layers that don't set
+                their own via Dense(dropout=...), in [0, 1)
             
         Returns:
             self for method chaining
         """
+        if gradient_clip is not None and gradient_clip < 0:
+            raise ValueError(f"gradient_clip must be >= 0, got {gradient_clip}")
+        if convergence is not None and convergence < 0:
+            raise ValueError(f"convergence must be >= 0, got {convergence}")
+        if dropout is not None and not 0.0 <= dropout < 1.0:
+            raise ValueError(f"dropout must be in [0, 1), got {dropout}")
+        if weight_init is not None:
+            weight_init = parse_weight_init(weight_init)
+
         if optimizer is not None:
             self._optimizer = parse_optimizer(optimizer)
         if loss is not None:
@@ -126,6 +152,18 @@ class Sequential:
             self._weight_decay = weight_decay
         if l1_regularization is not None:
             self._l1_regularization = l1_regularization
+        if gradient_clip is not None:
+            self._gradient_clip = gradient_clip
+        if weight_init is not None:
+            self._weight_init = weight_init
+        if convergence is not None:
+            self._convergence = convergence
+        if dropout is not None:
+            self._dropout = dropout
+        
+        # Settings changed after the network exists take effect immediately
+        if self._built:
+            self._apply_training_settings()
         
         return self
     
@@ -187,13 +225,26 @@ class Sequential:
                 if layer.dropout > 0:
                     lib.ann_set_layer_dropout(self._ptr, i + 1, layer.dropout)
         
-        # Apply regularization settings
+        self._apply_training_settings()
+        
+        self._built = True
+    
+    def _apply_training_settings(self) -> None:
+        """Push the optional training settings from compile() to the C network."""
         if self._weight_decay is not None and self._weight_decay > 0:
             lib.ann_set_weight_decay(self._ptr, self._weight_decay)
         if self._l1_regularization is not None and self._l1_regularization > 0:
             lib.ann_set_l1_regularization(self._ptr, self._l1_regularization)
-        
-        self._built = True
+        if self._gradient_clip is not None:
+            lib.ann_set_gradient_clip(self._ptr, self._gradient_clip)
+        if self._weight_init is not None:
+            lib.ann_set_weight_init(self._ptr, int(self._weight_init))
+        if self._convergence is not None:
+            lib.ann_set_convergence(self._ptr, self._convergence)
+        # Applies only to hidden layers without their own rate, so it must run
+        # after the layers (and their Dense(dropout=...) overrides) are in place
+        if self._dropout is not None:
+            lib.ann_set_dropout(self._ptr, self._dropout)
     
     def fit(
         self,

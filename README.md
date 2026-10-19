@@ -9,7 +9,7 @@ Python wrapper for the [libann](https://github.com/mseminatore/ann) neural netwo
 - **Activation functions**: Sigmoid, ReLU, LeakyReLU, Tanh, Softsign, Softmax
 - **Loss functions**: MSE, Categorical Cross-Entropy
 - **Learning rate schedulers**: Step decay, Exponential decay, Cosine annealing
-- **Hyperparameter tuning**: Grid search, Random search, Bayesian optimization, TPE
+- **Hyperparameter tuning**: Grid search, Random search, Bayesian optimization, TPE (pure-Python searches built on `Sequential`; libann's native hypertuner is not exposed)
 - **NumPy optional**: Works with Python lists, optimized for NumPy arrays
 - **Model persistence**: Save/load in text or binary format, ONNX export/import
 - **Network visualization**: Export architecture as PIKCHR diagrams (renders to SVG)
@@ -255,7 +255,7 @@ Sequential(layers=None, optimizer=None, loss=Loss.MSE, name=None)
 
 Methods:
 - `add(layer)` - Add a layer
-- `compile(optimizer, loss, learning_rate, weight_decay, l1_regularization)` - Configure training
+- `compile(optimizer, loss, learning_rate, weight_decay, l1_regularization, gradient_clip, weight_init, convergence, dropout)` - Configure training (see below)
 - `fit(x, y, epochs, batch_size, ...)` - Train the model
 - `predict(x)` - Generate predictions
 - `evaluate(x, y)` - Compute accuracy
@@ -277,6 +277,22 @@ Methods:
 pyann.backend_info()   # dict: blas, gpu (compiled in), gpu_active, plus CBLAS details when present
 pyann.enable_gpu()     # initialize the GPU backend; returns True if one is active
 pyann.gpu_enabled()    # whether a GPU backend is active
+```
+
+#### Training options
+
+All are optional keyword arguments to `compile()`; unset options keep libann's defaults.
+
+| Option | Meaning |
+|---|---|
+| `weight_decay`, `l1_regularization` | L2 / L1 regularization strength (0 = off) |
+| `gradient_clip` | Clip gradients to `[-value, value]`; 0 = off. 1.0-5.0 is typical and helps with exploding gradients |
+| `weight_init` | `'uniform'`, `'xavier'`, `'he'` or `'auto'` (default: chosen per layer from its activation); also `WeightInit.HE` etc. |
+| `convergence` | Stop training once the average loss falls below this value. **libann's default is 0.01**, so a run can end before `epochs` is reached; pass `convergence=0` to always train the full number |
+| `dropout` | Default dropout rate in `[0, 1)` for hidden layers that don't set their own with `Dense(dropout=...)` |
+
+```python
+model.compile(optimizer='adam', loss='mse', gradient_clip=5.0, weight_init='he', convergence=0.0)
 ```
 
 ### Layers
@@ -336,6 +352,17 @@ TPESearch(space, n_trials=50, n_startup=10, gamma=0.25)  # Tree-structured Parze
 ```
 
 All accept a `HyperparamSpace` and return `(best_result, all_results)` from `run()`.
+
+## What's Not Exposed
+
+pyann covers libann's training, inference, persistence, regularization and GPU features. These parts of libann's C API have no Python equivalent yet:
+
+- **Online / incremental training** (`ann_train_begin` / `ann_train_step` / `ann_train_end`): streaming data, fine-tuning a loaded model, single-sample updates. Use `fit()` for now.
+- **libann's native hypertuner** (`ann_hypertune.h`). `pyann.hypertune` is a separate Python implementation, so its search spaces and results differ from the C one (for example topology names, per-layer activation search, and the Gaussian-process settings).
+- **Error-log callbacks**: errors surface as Python exceptions instead.
+- **Tensor math** (gemm, elementwise ops and so on): use NumPy.
+
+`tests/test_binding_coverage.py` keeps this list honest. It compares libann's headers with the bindings and fails when upstream adds, removes or changes a function without a matching decision recorded there.
 
 ## Hardware Acceleration
 
