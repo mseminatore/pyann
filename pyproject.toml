@@ -7,9 +7,10 @@ requires = [
 build-backend = "scikit_build_core.build"
 
 [project]
-name = "pyann"
+name = "pylibann"
 version = "0.1.0"
-description = "Python wrapper for libann neural network library"
+description = "Keras-like Python API for the libann neural network library (import as pyann)"
+keywords = ["neural network", "machine learning", "keras", "libann", "blas", "gpu"]
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.8"
@@ -18,6 +19,9 @@ classifiers = [
     "Intended Audience :: Developers",
     "Intended Audience :: Science/Research",
     "License :: OSI Approved :: MIT License",
+    "Operating System :: MacOS :: MacOS X",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.8",
     "Programming Language :: Python :: 3.9",
@@ -40,6 +44,7 @@ dev = [
 [project.urls]
 Homepage = "https://github.com/mseminatore/pyann"
 Repository = "https://github.com/mseminatore/pyann"
+Issues = "https://github.com/mseminatore/pyann/issues"
 
 [tool.scikit-build]
 wheel.packages = ["src/pyann"]

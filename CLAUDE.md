@@ -41,6 +41,16 @@ The `ann/` submodule must be checked out (`git submodule update --init`). Wheels
 
 The built shared library goes to `src/pyann/lib/` for dev builds. Override with `PYANN_LIB_PATH` env var.
 
+## Releasing
+
+The PyPI distribution is `pylibann` (the name `pyann` is taken by an unrelated project); the import name is still `pyann`. Releases are tag-driven via `.github/workflows/wheels.yml`:
+
+1. Set `version` in `pyproject.toml` (PEP 440) and merge to `main`.
+2. Push a tag `vX.Y.Z`. The tag must equal the version or the `release-meta` job fails.
+3. A pre-release tag (`vX.Y.ZrcN`) publishes to TestPyPI via the `testpypi` environment; a final tag publishes to PyPI via the `pypi` environment. Both use trusted publishing (no tokens); each index needs a publisher pointing at this repo, `wheels.yml`, and the matching environment name.
+
+Try a release candidate on TestPyPI first and install it in a clean venv before tagging the real release.
+
 ## Conventions
 
 - **Enum + string API**: Activations, losses, and optimizers accept both enum values (`Activation.RELU`) and strings (`"relu"`). Parsing helpers (`parse_optimizer`, `parse_loss`, `parse_activation`) handle conversion.

@@ -25,6 +25,11 @@ jobs:
           python -m pip install build
           python -m build --sdist
 
+      - name: Check package metadata
+        run: |
+          python -m pip install twine
+          twine check dist/*
+
       # Prove the sdist is self-contained: build and test it away from the checkout
       - name: Install and test sdist
         env:
@@ -63,3 +68,61 @@ jobs:
         with:
           name: wheel-${{ matrix.name }}
           path: wheelhouse/*.whl
+
+  # Releases are tag-driven: push vX.Y.Z to publish to PyPI, or a pre-release
+  # tag such as vX.Y.ZrcN to publish to TestPyPI.
+  release-meta:
+    name: Release metadata
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    outputs:
+      prerelease: ${{ steps.meta.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Check tag against package version
+        id: meta
+        run: |
+          python -m pip install packaging
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import os, tomllib
+          from packaging.version import Version
+
+          tag = os.environ["GITHUB_REF_NAME"].removeprefix("v")
+          with open("pyproject.toml", "rb") as f:
+              version = tomllib.load(f)["project"]["version"]
+          if Version(tag) != Version(version):
+              raise SystemExit(f"::error::tag v{tag} does not match pyproject.toml version {version}")
+          print(f"prerelease={str(Version(version).is_prerelease).lower()}")
+          PY
+
+  publish:
+    name: Publish to ${{ needs.release-meta.outputs.prerelease == 'true' && 'TestPyPI' || 'PyPI' }}
+    needs: [sdist, wheels, release-meta]
+    runs-on: ubuntu-latest
+    # Each index has its own trusted publisher bound to one of these environments
+    environment: ${{ needs.release-meta.outputs.prerelease == 'true' && 'testpypi' || 'pypi' }}
+    permissions:
+      id-token: write   # trusted publishing: no API token needed
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: List distributions
+        run: ls -l dist
+
+      - name: Publish to TestPyPI
+        if: needs.release-meta.outputs.prerelease == 'true'
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+
+      - name: Publish to PyPI
+        if: needs.release-meta.outputs.prerelease != 'true'
+        uses: pypa/gh-action-pypi-publish@release/v1
