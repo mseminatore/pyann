@@ -1,11 +1,9 @@
 name: BLAS benchmark
 
 # Compares libann built with no BLAS, the project's CBLAS, OpenBLAS (and Accelerate on macOS)
+# Manual only: a paths filter on pull_request matches the whole PR diff, so it
+# would run on every push to a PR that ever touched benchmarks/
 on:
-  pull_request:
-    paths:
-      - benchmarks/**
-      - .github/workflows/blas-bench.yml
   workflow_dispatch:
 
 jobs:

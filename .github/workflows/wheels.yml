@@ -27,6 +27,8 @@ jobs:
 
       # Prove the sdist is self-contained: build and test it away from the checkout
       - name: Install and test sdist
+        env:
+          PYANN_EXPECT_BLAS: openblas
         run: |
           python -m pip install pytest numpy dist/*.tar.gz
           mkdir /tmp/sdist-test && cp -r tests /tmp/sdist-test/

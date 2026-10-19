@@ -63,7 +63,8 @@ if.platform-system = "^darwin"
 cmake.define = { USE_ACCELERATE = "ON", USE_METAL = "ON", CMAKE_OSX_DEPLOYMENT_TARGET = "12.0" }
 
 [[tool.scikit-build.overrides]]
-if.platform-system = "^(linux|windows)"
+# matched against sys.platform, which is "win32" on Windows
+if.platform-system = "^(linux|win32)"
 if.platform-machine = "^(x86_64|AMD64|aarch64)$"
 cmake.define = { USE_SCIPY_OPENBLAS = "ON" }
 
