@@ -5,7 +5,13 @@ A Keras-like API for training and inference with neural networks,
 powered by the lightweight libann C library.
 """
 
-__version__ = "0.1.0"
+try:
+    # Single source of truth: the version in pyproject.toml, via installed metadata
+    from importlib.metadata import PackageNotFoundError, version as _version
+
+    __version__ = _version("pylibann")
+except PackageNotFoundError:  # running from a source tree that was never installed
+    __version__ = "0+unknown"
 
 from pyann.core.network import Sequential
 from pyann.core.layers import Dense, Input
