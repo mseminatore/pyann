@@ -16,33 +16,58 @@ Python wrapper for the [libann](https://github.com/mseminatore/ann) neural netwo
 - **Regularization**: L1 and L2 (weight decay) regularization, dropout
 - **Evaluation**: Accuracy scoring, confusion matrix with MCC
 - **Data utilities**: CSV loading, normalization, one-hot encoding, train/val splitting
+- **Hardware acceleration**: BLAS-accelerated CPU everywhere (Accelerate on macOS, OpenBLAS on Linux and Windows), plus optional GPU inference and training via Metal (macOS) or CUDA
 
 ## Installation
 
-### Prerequisites
+```bash
+pip install pyann
+```
 
-1. Build the libann shared library:
+Pre-built wheels include the native library, so no compiler is needed:
+
+| Platform | BLAS | GPU |
+|---|---|---|
+| macOS (Apple silicon, 12+) | Accelerate | Metal |
+| Linux x86_64 and aarch64 (glibc, manylinux2014+) | OpenBLAS | - |
+| Windows x86_64 | OpenBLAS | - |
+
+On other platforms `pip` builds from source, which needs CMake and a C compiler (see below). NumPy is optional: `pip install "pyann[numpy]"`.
+
+### Building from source
 
 ```bash
-# Clone pyann and the ann submodule
-git clone https://github.com/mseminatore/pyann.git
+git clone --recurse-submodules https://github.com/mseminatore/pyann.git
 cd pyann
-git submodule add https://github.com/mseminatore/ann.git ann
-
-# Build the shared library
-python build_lib.py
+pip install -e ".[dev]"      # builds the native library with CMake
+pytest
 ```
 
-2. Install the Python package:
+The build picks the same acceleration as the wheels. On Linux and Windows it downloads the prebuilt OpenBLAS from the [`scipy-openblas32`](https://pypi.org/project/scipy-openblas32/) package. Choose other options by passing CMake flags through `CMAKE_ARGS`:
 
 ```bash
-pip install -e .
+CMAKE_ARGS="-DUSE_CUDA=ON" pip install -e .                                 # NVIDIA CUDA (Linux/Windows)
+CMAKE_ARGS="-DUSE_CBLAS=ON" pip install -e .                                # CBLAS from /opt/cblas
+CMAKE_ARGS="-DUSE_BLAS=ON" pip install -e .                                 # system OpenBLAS from /opt/OpenBLAS
+CMAKE_ARGS="-DUSE_METAL=OFF -DUSE_ACCELERATE=OFF" pip install -e .          # plain CPU build
 ```
 
-### With BLAS acceleration
+| CMake option | Meaning |
+|---|---|
+| `USE_ACCELERATE` | Apple Accelerate (macOS; default there) |
+| `USE_METAL` | Apple Metal GPU backend (macOS; default there) |
+| `USE_SCIPY_OPENBLAS` | OpenBLAS from `scipy-openblas32` (Linux/Windows; default there) |
+| `USE_BLAS` | OpenBLAS installed at `/opt/OpenBLAS` |
+| `USE_CBLAS` | [CBLAS](https://github.com/mseminatore/cblas) installed at `/opt/cblas` |
+| `USE_CUDA` | NVIDIA CUDA GPU backend |
 
-```bash
-python build_lib.py --cblas  # or --blas for OpenBLAS
+`python build_lib.py [--accelerate | --scipy-openblas | --cblas | --blas] [--metal] [--cuda] [--clean]` builds just the shared library into `src/pyann/lib/` without installing, which is handy when working on the C side. Set `PYANN_LIB_PATH` to load a library from another location.
+
+Check what a given install was built with:
+
+```python
+import pyann
+pyann.backend_info()   # {'blas': 'accelerate', 'gpu': 'metal', 'gpu_active': None, ...}
 ```
 
 ## Quick Start
@@ -244,6 +269,14 @@ Methods:
 - `set_l1_regularization(lambda_)` - Set L1 regularization coefficient
 - `summary()` - Get model summary
 
+### Backend
+
+```python
+pyann.backend_info()   # dict: blas, gpu (compiled in), gpu_active, plus CBLAS details when present
+pyann.enable_gpu()     # initialize the GPU backend; returns True if one is active
+pyann.gpu_enabled()    # whether a GPU backend is active
+```
+
 ### Layers
 
 ```python
@@ -267,6 +300,8 @@ Adam(lr=0.001)  # Recommended
 Loss.MSE                        # Mean Squared Error
 Loss.CATEGORICAL_CROSS_ENTROPY  # For classification
 ```
+
+`CATEGORICAL_CROSS_ENTROPY` needs a softmax output layer (one class per sample) or a sigmoid output layer (binary cross-entropy per output). Training with any other output activation fails.
 
 ### Activations
 
@@ -299,6 +334,28 @@ TPESearch(space, n_trials=50, n_startup=10, gamma=0.25)  # Tree-structured Parze
 ```
 
 All accept a `HyperparamSpace` and return `(best_result, all_results)` from `run()`.
+
+## Hardware Acceleration
+
+The CPU path uses the BLAS the library was built with (see `backend_info()["blas"]`). GPU use is opt-in:
+
+```python
+import pyann
+
+if pyann.enable_gpu():          # True when a GPU backend is compiled in and a device is available
+    print("Using", pyann.backend_info()["gpu_active"])   # 'metal' or 'cuda'
+
+model.fit(X, y, epochs=10)      # trains on the GPU when enabled
+model.predict(X)                # batch inference on the GPU when enabled
+```
+
+If no GPU backend is built in, or no device is found, `enable_gpu()` returns `False` and everything keeps running on the CPU with BLAS, so the same code works everywhere.
+
+Notes:
+- `enable_gpu()` applies to the whole process and cannot be undone.
+- GPU speedups depend on problem size. In an informal test on Apple silicon (batch size 128) Metal sped up batch inference but was several times slower than the CPU for training, which is why it is not enabled automatically. Measure your own workload.
+- The macOS wheels include Metal. CUDA is only available when building from source with `USE_CUDA=ON`, and has had little testing.
+- `predict()` runs the whole input as one batch call.
 
 ## License
 

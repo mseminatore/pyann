@@ -10,13 +10,14 @@
 #
 # The resulting library will be copied to pyann/lib/
 
-cmake_minimum_required(VERSION 3.14)
+cmake_minimum_required(VERSION 3.15)
 project(pyann_native VERSION 0.1.0 LANGUAGES C)
 
 # Options
 option(USE_BLAS "Use OpenBLAS for acceleration" OFF)
 option(USE_CBLAS "Use CBLAS for acceleration" OFF)
 option(USE_ACCELERATE "Use Apple Accelerate for BLAS (macOS only)" OFF)
+option(USE_SCIPY_OPENBLAS "Use the prebuilt OpenBLAS from the scipy-openblas32 Python package" OFF)
 option(USE_METAL "Use Apple Metal GPU acceleration (macOS only)" OFF)
 option(USE_CUDA "Use NVIDIA CUDA GPU acceleration" OFF)
 
@@ -115,6 +116,43 @@ elseif(USE_ACCELERATE)
     # The legacy CBLAS header is marked deprecated on macOS 13.3+
     target_compile_options(ann PRIVATE -Wno-deprecated-declarations)
     target_link_libraries(ann PRIVATE "-framework Accelerate")
+elseif(USE_SCIPY_OPENBLAS)
+    # Prebuilt, runtime-dispatched OpenBLAS (the one numpy and scipy ship) for
+    # Linux and Windows wheels. Its symbols are prefixed with scipy_ so it can't
+    # clash with another OpenBLAS in the same process.
+    find_package(Python COMPONENTS Interpreter REQUIRED)
+    execute_process(
+        COMMAND ${Python_EXECUTABLE} -c
+            "import scipy_openblas32 as s; print(s.get_include_dir()); print(s.get_lib_dir())"
+        OUTPUT_VARIABLE SOB_PATHS
+        RESULT_VARIABLE SOB_RESULT
+        OUTPUT_STRIP_TRAILING_WHITESPACE)
+    if(NOT SOB_RESULT EQUAL 0)
+        message(FATAL_ERROR "USE_SCIPY_OPENBLAS requires the scipy-openblas32 package (pip install scipy-openblas32)")
+    endif()
+    string(REGEX REPLACE "\r?\n" ";" SOB_PATHS "${SOB_PATHS}")
+    list(GET SOB_PATHS 0 SOB_INCLUDE_DIR)
+    list(GET SOB_PATHS 1 SOB_LIB_DIR)
+    find_library(SOB_LIBRARY NAMES scipy_openblas libscipy_openblas
+                 PATHS ${SOB_LIB_DIR} NO_DEFAULT_PATH)
+    if(NOT SOB_LIBRARY)
+        message(FATAL_ERROR "scipy-openblas32 library not found in ${SOB_LIB_DIR}")
+    endif()
+    # libann calls the unprefixed names
+    foreach(fn sgemm sgemv sger saxpy saxpby sscal sasum)
+        target_compile_definitions(ann PRIVATE cblas_${fn}=scipy_cblas_${fn})
+    endforeach()
+    target_compile_definitions(ann PRIVATE USE_BLAS=1)
+    target_include_directories(ann PRIVATE ${SOB_INCLUDE_DIR})
+    target_link_libraries(ann PRIVATE ${SOB_LIBRARY})
+    # Development builds load OpenBLAS from the package; wheels bundle a copy
+    # next to libann instead (see the install rules below)
+    if(NOT SKBUILD)
+        set_property(TARGET ann APPEND PROPERTY INSTALL_RPATH "${SOB_LIB_DIR}")
+    endif()
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        target_compile_definitions(ann PRIVATE _GNU_SOURCE)
+    endif()
 elseif(USE_BLAS)
     target_compile_definitions(ann PRIVATE USE_BLAS=1)
     
@@ -141,7 +179,7 @@ if(USE_CBLAS)
     set(PYANN_BLAS_NAME "cblas")
 elseif(USE_ACCELERATE)
     set(PYANN_BLAS_NAME "accelerate")
-elseif(USE_BLAS)
+elseif(USE_BLAS OR USE_SCIPY_OPENBLAS)
     set(PYANN_BLAS_NAME "openblas")
 endif()
 if(PYANN_BLAS_NAME)
@@ -183,6 +221,13 @@ if(SKBUILD)
         LIBRARY DESTINATION pyann/lib
         RUNTIME DESTINATION pyann/lib
     )
+    if(USE_SCIPY_OPENBLAS)
+        # Ship OpenBLAS (and its runtime dependencies) next to libann so the
+        # wheel works without scipy-openblas32 installed, including source
+        # installs that never go through auditwheel or delvewheel.
+        file(GLOB SOB_RUNTIME_LIBS "${SOB_LIB_DIR}/*.so*" "${SOB_LIB_DIR}/*.dll" "${SOB_LIB_DIR}/*.dylib")
+        install(FILES ${SOB_RUNTIME_LIBS} DESTINATION pyann/lib)
+    endif()
     set(PYANN_LIB_DIR "wheel: pyann/lib")
 else()
     # Development build: copy the library next to the sources
@@ -209,6 +254,7 @@ message(STATUS "  ANN source: ${ANN_SOURCE_DIR}")
 message(STATUS "  BLAS: ${USE_BLAS}")
 message(STATUS "  CBLAS: ${USE_CBLAS}")
 message(STATUS "  Accelerate: ${USE_ACCELERATE}")
+message(STATUS "  scipy-openblas32: ${USE_SCIPY_OPENBLAS}")
 message(STATUS "  Metal: ${USE_METAL}")
 message(STATUS "  CUDA: ${USE_CUDA}")
 message(STATUS "  Output: ${PYANN_LIB_DIR}")

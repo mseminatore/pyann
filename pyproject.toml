@@ -1,5 +1,9 @@
 [build-system]
-requires = ["scikit-build-core>=0.10"]
+requires = [
+    "scikit-build-core>=0.10",
+    # Prebuilt OpenBLAS for the Linux and Windows wheels (macOS uses Accelerate)
+    "scipy-openblas32; (platform_system == 'Linux' or platform_system == 'Windows') and (platform_machine == 'x86_64' or platform_machine == 'AMD64' or platform_machine == 'aarch64')",
+]
 build-backend = "scikit_build_core.build"
 
 [project]
@@ -43,10 +47,35 @@ wheel.packages = ["src/pyann"]
 # Python version: tag the wheel py3-none-<platform>
 wheel.py-api = "py3"
 cmake.build-type = "Release"
+# Ship only the ann sources the build needs, not its tests, docs or examples
+sdist.exclude = [
+    "ann/.github",
+    "ann/data",
+    "ann/docs",
+    "ann/examples",
+    "ann/tests",
+    "ann/testy",
+    "ann/CLAUDE.md",
+]
 
 [[tool.scikit-build.overrides]]
 if.platform-system = "^darwin"
 cmake.define = { USE_ACCELERATE = "ON", USE_METAL = "ON", CMAKE_OSX_DEPLOYMENT_TARGET = "12.0" }
+
+[[tool.scikit-build.overrides]]
+# matched against sys.platform, which is "win32" on Windows
+if.platform-system = "^(linux|win32)"
+if.platform-machine = "^(x86_64|AMD64|aarch64)$"
+cmake.define = { USE_SCIPY_OPENBLAS = "ON" }
+
+[tool.cibuildwheel]
+# The wheel is tagged py3-none, so one interpreter per platform is enough
+build = ["cp39-manylinux*", "cp39-macosx*", "cp39-win*"]
+test-requires = ["pytest", "numpy"]
+test-command = "pytest {project}/tests"
+
+[tool.cibuildwheel.macos]
+environment = { MACOSX_DEPLOYMENT_TARGET = "12.0" }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

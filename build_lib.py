@@ -37,6 +37,7 @@ def build_library(
     use_blas: bool = False,
     use_cblas: bool = False,
     use_accelerate: bool = False,
+    use_scipy_openblas: bool = False,
     use_metal: bool = False,
     use_cuda: bool = False,
 ):
@@ -58,6 +59,10 @@ def build_library(
         cmake_args.append("-DUSE_CBLAS=ON")
     elif use_accelerate:
         cmake_args.append("-DUSE_ACCELERATE=ON")
+    elif use_scipy_openblas:
+        cmake_args.append("-DUSE_SCIPY_OPENBLAS=ON")
+        # CMake locates the scipy-openblas32 package with this interpreter
+        cmake_args.append(f"-DPython_EXECUTABLE={sys.executable}")
     elif use_blas:
         cmake_args.append("-DUSE_BLAS=ON")
 
@@ -94,6 +99,7 @@ def main():
     parser.add_argument("--blas", action="store_true", help="Enable OpenBLAS")
     parser.add_argument("--cblas", action="store_true", help="Enable CBLAS")
     parser.add_argument("--accelerate", action="store_true", help="Use Apple Accelerate for BLAS (macOS only)")
+    parser.add_argument("--scipy-openblas", action="store_true", help="Use OpenBLAS from the scipy-openblas32 package (pip install scipy-openblas32)")
     parser.add_argument("--metal", action="store_true", help="Enable Apple Metal GPU acceleration (macOS only)")
     parser.add_argument("--cuda", action="store_true", help="Enable NVIDIA CUDA GPU acceleration")
     parser.add_argument("--clean", action="store_true", help="Clean build directory first")
@@ -115,6 +121,7 @@ def main():
         use_blas=args.blas,
         use_cblas=args.cblas,
         use_accelerate=args.accelerate,
+        use_scipy_openblas=args.scipy_openblas,
         use_metal=args.metal,
         use_cuda=args.cuda,
     )
