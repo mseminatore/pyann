@@ -123,7 +123,7 @@ elseif(USE_SCIPY_OPENBLAS)
     find_package(Python COMPONENTS Interpreter REQUIRED)
     execute_process(
         COMMAND ${Python_EXECUTABLE} -c
-            "import scipy_openblas32 as s; from importlib.metadata import files; print(s.get_include_dir()); print(s.get_lib_dir()); print(next((str(f.locate()) for f in files('scipy-openblas32') if f.name == 'LICENSE.txt'), ''))"
+            "import scipy_openblas32 as s; from importlib.metadata import files; print(s.get_include_dir()); print(s.get_lib_dir()); print(next((f.locate().as_posix() for f in files('scipy-openblas32') if f.name == 'LICENSE.txt'), ''))"
         OUTPUT_VARIABLE SOB_PATHS
         RESULT_VARIABLE SOB_RESULT
         OUTPUT_STRIP_TRAILING_WHITESPACE)
