@@ -14,21 +14,32 @@ NumPy is optional — `utils/compat.py` provides fallback helpers that work with
 ## Build & Test
 
 ```bash
-# Build the C shared library (requires CMake + C compiler)
-python build_lib.py              # Release build
-python build_lib.py --cblas      # With CBLAS acceleration
-python build_lib.py --clean      # Clean rebuild
-
-# Install Python package in dev mode
+# Build the native library and install in dev mode (scikit-build-core runs CMake)
 pip install -e ".[dev]"
+
+# Pass CMake options through CMAKE_ARGS, e.g. CUDA or a plain CPU build
+CMAKE_ARGS="-DUSE_CUDA=ON" pip install -e .
+CMAKE_ARGS="-DUSE_METAL=OFF -DUSE_ACCELERATE=OFF" pip install -e .
+
+# Or build only the shared library into src/pyann/lib/ (no install)
+python build_lib.py                  # defaults: no BLAS (see flags below)
+python build_lib.py --accelerate --metal   # macOS
+python build_lib.py --scipy-openblas       # Linux/Windows (pip install scipy-openblas32 first)
+python build_lib.py --cblas | --blas | --cuda | --clean
 
 # Run tests
 pytest                                                    # all tests
 pytest tests/test_layers.py                               # single file
 pytest tests/test_layers.py::TestDense::test_basic_dense -v  # single test
+
+# Build a wheel / sdist
+pip wheel . --no-deps -w dist
+python -m build --sdist
 ```
 
-The built shared library goes to `src/pyann/lib/`. Override with `PYANN_LIB_PATH` env var.
+The `ann/` submodule must be checked out (`git submodule update --init`). Wheels default to Accelerate+Metal on macOS and the bundled `scipy-openblas32` OpenBLAS on Linux/Windows (see `[[tool.scikit-build.overrides]]` in `pyproject.toml`). CI (`.github/workflows/wheels.yml`) builds and tests wheels with cibuildwheel; `tests/test_backend.py` fails a wheel that lost its BLAS. `.github/workflows/blas-bench.yml` (manual) compares BLAS libraries using `benchmarks/`.
+
+The built shared library goes to `src/pyann/lib/` for dev builds. Override with `PYANN_LIB_PATH` env var.
 
 ## Conventions
 
