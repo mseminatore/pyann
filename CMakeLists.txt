@@ -123,7 +123,7 @@ elseif(USE_SCIPY_OPENBLAS)
     find_package(Python COMPONENTS Interpreter REQUIRED)
     execute_process(
         COMMAND ${Python_EXECUTABLE} -c
-            "import scipy_openblas32 as s; print(s.get_include_dir()); print(s.get_lib_dir())"
+            "import scipy_openblas32 as s; from importlib.metadata import files; print(s.get_include_dir()); print(s.get_lib_dir()); print(next((f.locate().as_posix() for f in files('scipy-openblas32') if f.name == 'LICENSE.txt'), ''))"
         OUTPUT_VARIABLE SOB_PATHS
         RESULT_VARIABLE SOB_RESULT
         OUTPUT_STRIP_TRAILING_WHITESPACE)
@@ -133,6 +133,10 @@ elseif(USE_SCIPY_OPENBLAS)
     string(REGEX REPLACE "\r?\n" ";" SOB_PATHS "${SOB_PATHS}")
     list(GET SOB_PATHS 0 SOB_INCLUDE_DIR)
     list(GET SOB_PATHS 1 SOB_LIB_DIR)
+    list(LENGTH SOB_PATHS SOB_PATH_COUNT)
+    if(SOB_PATH_COUNT GREATER 2)
+        list(GET SOB_PATHS 2 SOB_LICENSE)
+    endif()
     find_library(SOB_LIBRARY NAMES scipy_openblas libscipy_openblas
                  PATHS ${SOB_LIB_DIR} NO_DEFAULT_PATH)
     if(NOT SOB_LIBRARY)
@@ -227,6 +231,12 @@ if(SKBUILD)
         # installs that never go through auditwheel or delvewheel.
         file(GLOB SOB_RUNTIME_LIBS "${SOB_LIB_DIR}/*.so*" "${SOB_LIB_DIR}/*.dll" "${SOB_LIB_DIR}/*.dylib")
         install(FILES ${SOB_RUNTIME_LIBS} DESTINATION pyann/lib)
+        # OpenBLAS, LAPACK, libgfortran and libquadmath carry their own licenses
+        if(SOB_LICENSE AND EXISTS "${SOB_LICENSE}")
+            install(FILES "${SOB_LICENSE}" DESTINATION pyann/lib RENAME LICENSE-scipy-openblas32.txt)
+        else()
+            message(FATAL_ERROR "scipy-openblas32 license file not found; it must ship with the bundled libraries")
+        endif()
     endif()
     set(PYANN_LIB_DIR "wheel: pyann/lib")
 else()

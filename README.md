@@ -21,8 +21,10 @@ Python wrapper for the [libann](https://github.com/mseminatore/ann) neural netwo
 ## Installation
 
 ```bash
-pip install pyann
+pip install pylibann
 ```
+
+The PyPI package is called **`pylibann`**, but you import it as `pyann`. (The unrelated `pyann` project on PyPI is a different package with the same module name, so don't install both in one environment.)
 
 Pre-built wheels include the native library, so no compiler is needed:
 
@@ -32,7 +34,7 @@ Pre-built wheels include the native library, so no compiler is needed:
 | Linux x86_64 and aarch64 (glibc, manylinux2014+) | OpenBLAS | - |
 | Windows x86_64 | OpenBLAS | - |
 
-On other platforms `pip` builds from source, which needs CMake and a C compiler (see below). NumPy is optional: `pip install "pyann[numpy]"`.
+On other platforms `pip` builds from source, which needs CMake and a C compiler (see below). NumPy is optional: `pip install "pylibann[numpy]"`.
 
 ### Building from source
 
@@ -359,4 +361,6 @@ Notes:
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) for details.
+MIT License - see [LICENSE](https://github.com/mseminatore/pyann/blob/main/LICENSE) for details.
+
+The Linux and Windows wheels also bundle OpenBLAS, LAPACK and the GCC runtime libraries (`libgfortran`, `libquadmath`) under their own licenses, included in the wheel as `pyann/lib/LICENSE-scipy-openblas32.txt`.
