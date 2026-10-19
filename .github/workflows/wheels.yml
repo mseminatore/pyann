@@ -101,7 +101,7 @@ jobs:
           PY
 
   publish:
-    name: Publish to ${{ needs.release-meta.outputs.prerelease == 'true' && 'TestPyPI' || 'PyPI' }}
+    name: Publish
     needs: [sdist, wheels, release-meta]
     runs-on: ubuntu-latest
     # Each index has its own trusted publisher bound to one of these environments
