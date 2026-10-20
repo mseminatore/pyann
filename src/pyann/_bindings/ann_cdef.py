@@ -14,6 +14,11 @@ typedef enum {
     LAYER_OUTPUT
 } Layer_type;
 
+// Layer kinds
+typedef enum {
+    LAYER_KIND_DENSE
+} Layer_kind;
+
 // Activation types
 typedef enum {
     ACTIVATION_NULL,
@@ -153,6 +158,7 @@ real ann_lr_scheduler_cosine(unsigned epoch, real base_lr, void *data);
 int ann_get_layer_count(const PNetwork pnet);
 int ann_get_layer_nodes(const PNetwork pnet, int layer_index);
 Activation_type ann_get_layer_activation(const PNetwork pnet, int layer_index);
+Layer_kind ann_get_layer_kind(const PNetwork pnet, int layer_index);
 
 // Confusion matrix
 real ann_confusion_matrix(PNetwork pnet, PTensor inputs, PTensor outputs, int *tp, int *fp, int *tn, int *fn);
