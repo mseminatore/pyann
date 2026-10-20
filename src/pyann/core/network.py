@@ -383,7 +383,8 @@ class Sequential:
             batch_size: Mini-batch size
             validation_data: Optional (x_val, y_val) tuple; its loss is
                 measured after every epoch and monitored by EarlyStopping
-            verbose: Verbosity level (0=silent, 1=progress)
+            verbose: 0 trains silently; 1 prints libann's progress (each
+                epoch's loss and learning rate)
             callbacks: List of callbacks (e.g., EarlyStopping)
             lr_scheduler: Learning rate scheduler
             
@@ -439,6 +440,12 @@ class Sequential:
                 "Invalid validation data",
             )
         
+        # libann prints progress through the network's print function; a NULL
+        # one silences it for this fit()
+        print_func = lib.ann_get_print_function(self._ptr)
+        if not verbose:
+            lib.ann_set_print_function(self._ptr, ffi.NULL)
+        
         # Train (on the GPU when pyann.enable_gpu() succeeded)
         try:
             self._gpu_upload()
@@ -458,6 +465,7 @@ class Sequential:
         finally:
             if val_tensors is not None:
                 lib.ann_set_validation_data(self._ptr, ffi.NULL, ffi.NULL)
+            lib.ann_set_print_function(self._ptr, print_func)
         
         return history
     
