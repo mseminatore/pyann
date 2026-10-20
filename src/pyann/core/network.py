@@ -597,6 +597,21 @@ class Sequential:
         if ptr == ffi.NULL:
             raise NetworkError(f"Failed to load model from {filepath}")
         
+        return cls._from_ptr(ptr, filepath)
+    
+    @classmethod
+    def _from_ptr(cls, ptr, filepath) -> "Sequential":
+        """Wrap a network loaded by libann, rebuilding the Python layer list.
+        
+        Only dense layers have a Python counterpart; a file holding other
+        layer kinds (saved by a newer libann) is rejected rather than misread.
+        """
+        n_layers = lib.ann_get_layer_count(ptr)
+        for i in range(n_layers):
+            if lib.ann_get_layer_kind(ptr, i) != lib.LAYER_KIND_DENSE:
+                lib.ann_free_network(ptr)
+                raise NetworkError(f"{filepath} contains layer types pyann does not support yet")
+        
         # Create model wrapper
         model = cls.__new__(cls)
         model._layers = []
@@ -608,7 +623,6 @@ class Sequential:
         model._input_shape = None
         
         # Reconstruct layer info from C network
-        n_layers = lib.ann_get_layer_count(ptr)
         for i in range(n_layers):
             units = lib.ann_get_layer_nodes(ptr, i)
             activation = lib.ann_get_layer_activation(ptr, i)
@@ -646,27 +660,7 @@ class Sequential:
         if ptr == ffi.NULL:
             raise NetworkError(f"Failed to load ONNX model from {filepath}")
         
-        # Create model wrapper
-        model = cls.__new__(cls)
-        model._layers = []
-        model._optimizer = None
-        model._loss = Loss.MSE
-        model._name = None
-        model._ptr = ptr
-        model._built = True
-        model._input_shape = None
-        
-        # Reconstruct layer info from C network
-        n_layers = lib.ann_get_layer_count(ptr)
-        for i in range(n_layers):
-            units = lib.ann_get_layer_nodes(ptr, i)
-            activation = lib.ann_get_layer_activation(ptr, i)
-            if i == 0:
-                model._input_shape = (units,)
-            else:
-                model._layers.append(Dense(units, activation=Activation(activation)))
-        
-        return model
+        return cls._from_ptr(ptr, filepath)
     
     def export_pikchr(self, filepath: Union[str, Path]) -> None:
         """Export network architecture as a PIKCHR diagram.
