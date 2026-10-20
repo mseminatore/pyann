@@ -25,6 +25,7 @@ from pathlib import Path
 import numpy as np
 
 from pyann import Sequential, Dense, Adam, Loss, Activation, backend_info
+import pyann
 from pyann.callbacks import ExponentialDecay
 
 
@@ -120,8 +121,14 @@ def main():
                         help="Export trained model to ONNX format")
     parser.add_argument("--show-sample", action="store_true",
                         help="Show a sample image as ASCII art")
-    
+    parser.add_argument("--use-gpu", action="store_true",
+                        help="Use GPU backend if available")
     args = parser.parse_args()
+    
+    if args.use_gpu:
+        if pyann.enable_gpu():          # True when a GPU backend is compiled in and a device is available
+            print("Using", pyann.backend_info()["gpu_active"])   # 'metal' or 'cuda'
+
 
     # Print backend configuration
     info = backend_info()
@@ -130,6 +137,7 @@ def main():
     config = f"BLAS: {blas}, GPU: {gpu}"
     if info["cblas_isa"]:
         config += f", ISA: {info['cblas_isa']}"
+
     print(f"Backend: {config}")
 
     # Check if data files exist
@@ -169,7 +177,7 @@ def main():
     
     # Learning rate scheduler (5% decay per epoch)
     scheduler = ExponentialDecay(gamma=0.95)
-    
+
     # Train
     start_time = time.time()
     model.fit(
