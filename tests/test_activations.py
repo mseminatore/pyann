@@ -16,6 +16,7 @@ class TestActivation:
         assert Activation.TANH == 4
         assert Activation.SOFTSIGN == 5
         assert Activation.SOFTMAX == 6
+        assert Activation.GELU == 7
     
     def test_from_string(self):
         """Test string to enum conversion."""
@@ -25,6 +26,7 @@ class TestActivation:
         assert Activation.from_string("softmax") == Activation.SOFTMAX
         assert Activation.from_string("leaky_relu") == Activation.LEAKY_RELU
         assert Activation.from_string("leakyrelu") == Activation.LEAKY_RELU
+        assert Activation.from_string("GELU") == Activation.GELU
     
     def test_from_string_invalid(self):
         """Test invalid string raises ValueError."""

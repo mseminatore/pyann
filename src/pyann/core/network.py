@@ -298,13 +298,16 @@ class Sequential:
             y: Training target data  
             epochs: Number of training epochs
             batch_size: Mini-batch size
-            validation_data: Optional (x_val, y_val) tuple
+            validation_data: Optional (x_val, y_val) tuple; its loss is
+                measured after every epoch and monitored by EarlyStopping
             verbose: Verbosity level (0=silent, 1=progress)
             callbacks: List of callbacks (e.g., EarlyStopping)
             lr_scheduler: Learning rate scheduler
             
         Returns:
-            Dictionary with training history
+            Dictionary with training history: ``epochs``; with validation
+            data, ``val_loss`` and ``val_accuracy`` for the final weights;
+            with EarlyStopping, ``best_epoch``
         """
         self._build()
         self.end_online_training()
@@ -331,20 +334,47 @@ class Sequential:
         if lr_scheduler is not None:
             self._setup_lr_scheduler(lr_scheduler)
         
-        # Train (on the GPU when pyann.enable_gpu() succeeded)
-        self._gpu_upload()
-        loss = lib.ann_train_network(self._ptr, x_tensor._ptr, y_tensor._ptr, n_samples)
-        if loss == 0.0:
-            raise NetworkError("Training failed")
+        # Early stopping runs inside libann; every fit() sets it, so a
+        # callback from an earlier fit() does not carry over
+        stopping = next((c for c in (callbacks or []) if isinstance(c, EarlyStopping)), None)
+        if stopping is not None:
+            if stopping.patience < 1:
+                raise InvalidParameterError("EarlyStopping patience must be at least 1")
+            lib.ann_set_early_stopping(self._ptr, stopping.patience, stopping.min_delta,
+                                       1 if stopping.restore_best else 0)
+        else:
+            lib.ann_set_early_stopping(self._ptr, 0, 0.0, 0)
         
-        # Build history dict
-        history = {"epochs": epochs}
-        
-        # Evaluate on validation data if provided
+        # libann borrows the validation tensors, so they stay referenced until
+        # training ends and are detached before they are freed
+        val_tensors = None
         if validation_data is not None:
             x_val, y_val = validation_data
-            val_accuracy = self.evaluate(x_val, y_val)
-            history["val_accuracy"] = val_accuracy
+            val_tensors = (Tensor(to_array(x_val)), Tensor(to_array(y_val)))
+            raise_for_error_code(
+                lib.ann_set_validation_data(self._ptr, val_tensors[0]._ptr, val_tensors[1]._ptr),
+                "Invalid validation data",
+            )
+        
+        # Train (on the GPU when pyann.enable_gpu() succeeded)
+        try:
+            self._gpu_upload()
+            loss = lib.ann_train_network(self._ptr, x_tensor._ptr, y_tensor._ptr, n_samples)
+            if loss == 0.0:
+                raise NetworkError("Training failed")
+            
+            # Build history dict
+            history = {"epochs": epochs}
+            if stopping is not None:
+                history["best_epoch"] = lib.ann_get_best_epoch(self._ptr)
+            
+            # Evaluate the final weights on the validation data
+            if val_tensors is not None:
+                history["val_loss"] = lib.ann_evaluate_loss(self._ptr, val_tensors[0]._ptr, val_tensors[1]._ptr)
+                history["val_accuracy"] = lib.ann_evaluate_accuracy(self._ptr, val_tensors[0]._ptr, val_tensors[1]._ptr)
+        finally:
+            if val_tensors is not None:
+                lib.ann_set_validation_data(self._ptr, ffi.NULL, ffi.NULL)
         
         return history
     
@@ -506,6 +536,27 @@ class Sequential:
         accuracy = lib.ann_evaluate_accuracy(self._ptr, x_tensor._ptr, y_tensor._ptr)
         return accuracy
     
+    def evaluate_loss(self, x: ArrayLike, y: ArrayLike) -> float:
+        """Compute the model's loss on data, averaged like the training loss.
+        
+        Args:
+            x: Input data
+            y: Target data
+            
+        Returns:
+            Average loss (MSE, or cross-entropy, per the model's loss function)
+        """
+        if not self._built:
+            raise NetworkError("Model must be trained before evaluation")
+        
+        x_tensor = Tensor(to_array(x))
+        y_tensor = Tensor(to_array(y))
+        
+        loss = lib.ann_evaluate_loss(self._ptr, x_tensor._ptr, y_tensor._ptr)
+        if loss < 0.0:
+            raise InvalidParameterError("Data shape does not match the model's input and output sizes")
+        return loss
+    
     def save(self, filepath: Union[str, Path], format: str = "text") -> None:
         """Save the model to a file.
         
@@ -639,7 +690,8 @@ class Sequential:
     def export_learning_curve(self, filepath: Union[str, Path]) -> None:
         """Export training history as CSV for learning curve visualization.
         
-        Writes epoch, loss, and learning rate data collected during training.
+        Writes epoch, loss, and learning rate data collected during training,
+        plus a val_loss column when fit() was given validation_data.
         
         Args:
             filepath: Output CSV file path

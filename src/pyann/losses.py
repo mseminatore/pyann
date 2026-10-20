@@ -14,6 +14,9 @@ class Loss(IntEnum):
     MEAN_SQUARED_ERROR = 0
     CCE = 1
     CROSS_ENTROPY = 1
+    # LOSS_BINARY_CROSS_ENTROPY: the same loss, binary per output with a sigmoid output layer
+    BINARY_CROSS_ENTROPY = 1
+    BCE = 1
     
     @classmethod
     def from_string(cls, name: str) -> "Loss":
@@ -35,6 +38,9 @@ class Loss(IntEnum):
             "cce": cls.CCE,
             "cross_entropy": cls.CROSS_ENTROPY,
             "crossentropy": cls.CROSS_ENTROPY,
+            "binary_cross_entropy": cls.BINARY_CROSS_ENTROPY,
+            "binary_crossentropy": cls.BINARY_CROSS_ENTROPY,
+            "bce": cls.BCE,
         }
         key = name.lower().replace("-", "_")
         if key not in name_map:

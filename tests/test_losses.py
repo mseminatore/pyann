@@ -19,6 +19,8 @@ class TestLoss:
         assert Loss.from_string("categorical_cross_entropy") == Loss.CATEGORICAL_CROSS_ENTROPY
         assert Loss.from_string("cce") == Loss.CCE
         assert Loss.from_string("cross_entropy") == Loss.CROSS_ENTROPY
+        assert Loss.from_string("binary_crossentropy") == Loss.BINARY_CROSS_ENTROPY
+        assert Loss.from_string("bce") == Loss.BCE
     
     def test_from_string_invalid(self):
         """Test invalid string raises ValueError."""
@@ -30,6 +32,8 @@ class TestLoss:
         assert Loss.MEAN_SQUARED_ERROR == Loss.MSE
         assert Loss.CCE == Loss.CATEGORICAL_CROSS_ENTROPY
         assert Loss.CROSS_ENTROPY == Loss.CATEGORICAL_CROSS_ENTROPY
+        assert Loss.BINARY_CROSS_ENTROPY == Loss.CATEGORICAL_CROSS_ENTROPY
+        assert Loss.BCE == Loss.CATEGORICAL_CROSS_ENTROPY
 
 
 class TestParseLoss:

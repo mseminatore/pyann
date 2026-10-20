@@ -22,13 +22,15 @@ typedef enum {
     ACTIVATION_LEAKY_RELU,
     ACTIVATION_TANH,
     ACTIVATION_SOFTSIGN,
-    ACTIVATION_SOFTMAX
+    ACTIVATION_SOFTMAX,
+    ACTIVATION_GELU
 } Activation_type;
 
 // Loss function types
 typedef enum {
     LOSS_MSE,
     LOSS_CATEGORICAL_CROSS_ENTROPY,
+    LOSS_BINARY_CROSS_ENTROPY = 1,  // alias of LOSS_CATEGORICAL_CROSS_ENTROPY
     LOSS_DEFAULT = 0        // LOSS_MSE
 } Loss_type;
 
@@ -113,6 +115,7 @@ real ann_train_step(PNetwork pnet, const real *inputs, const real *targets, int 
 void ann_train_end(PNetwork pnet);
 int ann_predict(PNetwork pnet, const real *inputs, real *outputs);
 real ann_evaluate_accuracy(PNetwork pnet, PTensor x_test, PTensor y_test);
+real ann_evaluate_loss(const PNetwork pnet, const PTensor inputs, const PTensor outputs);
 
 // Network configuration
 void ann_set_learning_rate(PNetwork pnet, real lr);
@@ -120,6 +123,9 @@ void ann_set_convergence(PNetwork pnet, real epsilon);
 void ann_set_loss_function(PNetwork pnet, Loss_type loss);
 void ann_set_batch_size(PNetwork pnet, unsigned batch_size);
 void ann_set_epoch_limit(PNetwork pnet, unsigned epochs);
+int ann_set_validation_data(PNetwork pnet, PTensor inputs, PTensor outputs);
+void ann_set_early_stopping(PNetwork pnet, unsigned patience, real min_delta, int restore_best);
+unsigned ann_get_best_epoch(const PNetwork pnet);
 void ann_set_gradient_clip(PNetwork pnet, real max_gradient);
 void ann_set_dropout(PNetwork pnet, real rate);
 void ann_set_layer_dropout(PNetwork pnet, int layer_index, real rate);
