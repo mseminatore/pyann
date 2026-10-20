@@ -74,6 +74,7 @@ CDEF_ONLY = {
     "cblas_get_corename": "from the optional external CBLAS library",
     "cblas_get_isa_features": "from the optional external CBLAS library",
     "pyann_blas_backend": "defined by pyann itself (src/native/pyann_info.c)",
+    "pyann_gpu_backend": "defined by pyann itself (src/native/pyann_info.c)",
 }
 
 # --- Header and cdef parsing ---------------------------------------------------

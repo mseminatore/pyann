@@ -4,7 +4,7 @@ from typing import Optional, Union, List, Tuple, TYPE_CHECKING
 from pathlib import Path
 
 from pyann._bindings.ffi import ffi, lib, gpu_enabled
-from pyann.core.layers import Layer, Dense, Input, parse_layer
+from pyann.core.layers import Layer, Dense, Input, Conv2D, MaxPool2D, Flatten, parse_layer
 from pyann.core.tensor import Tensor
 from pyann.activations import Activation
 from pyann.losses import Loss, parse_loss
@@ -55,6 +55,19 @@ def _batch_buffer(data: ArrayLike, columns: int, name: str):
             raise ValueError(f"{name} has a row of {len(row)} values but the network expects {columns}")
     buffer = ffi.new("real[]", [v for row in arr for v in row])
     return buffer, rows, buffer
+
+
+def _activation_name(layer) -> str:
+    """A layer's activation for display: 'relu', 'softmax', ... or 'linear'."""
+    act = layer.activation_type
+    return "linear" if act == Activation.NONE else act.name.lower()
+
+
+def _prod(shape) -> int:
+    result = 1
+    for d in shape:
+        result *= d
+    return result
 
 
 class Sequential:
@@ -124,7 +137,7 @@ class Sequential:
             if self._input_shape is not None:
                 raise InvalidParameterError("Input shape already set")
             self._input_shape = layer.shape
-        elif isinstance(layer, Dense):
+        elif isinstance(layer, (Dense, Conv2D)):
             if layer.input_shape is not None:
                 if self._input_shape is not None and len(self._layers) > 0:
                     raise InvalidParameterError("Input shape already set")
@@ -211,9 +224,12 @@ class Sequential:
         
         if self._input_shape is None:
             raise NetworkError(
-                "Input shape not set. Provide input_shape to first Dense layer "
+                "Input shape not set. Provide input_shape to the first layer "
                 "or add an Input layer."
             )
+        
+        # Checks every layer fits its input before anything is allocated
+        self._layer_shapes()
         
         # Create C network
         opt_type = self._optimizer._get_type()
@@ -225,44 +241,111 @@ class Sequential:
         if self._optimizer.learning_rate is not None:
             lib.ann_set_learning_rate(self._ptr, self._optimizer.learning_rate)
         
-        # Add input layer
-        input_units = self._input_shape[0] if len(self._input_shape) == 1 else (
-            self._input_shape[0] * self._input_shape[1] if len(self._input_shape) == 2 
-            else 1
-        )
-        for dim in self._input_shape:
-            input_units = dim if len(self._input_shape) == 1 else input_units
-        
-        # Compute flat input size
-        input_units = 1
-        for d in self._input_shape:
-            input_units *= d
-        
-        result = lib.ann_add_layer(self._ptr, input_units, lib.LAYER_INPUT, lib.ACTIVATION_NULL)
-        raise_for_error_code(result, "Failed to add input layer")
-        
-        # Add hidden and output layers
-        for i, layer in enumerate(self._layers):
-            if isinstance(layer, Dense):
-                is_output = (i == len(self._layers) - 1)
-                layer_type = lib.LAYER_OUTPUT if is_output else lib.LAYER_HIDDEN
-                
-                result = lib.ann_add_layer(
-                    self._ptr,
-                    layer.units,
-                    layer_type,
-                    layer.activation_type
-                )
-                raise_for_error_code(result, f"Failed to add layer {i}")
+        try:
+            image = self._image_input_shape()
+            if image is not None:
+                result = lib.ann_add_input(self._ptr, *image)
+            else:
+                result = lib.ann_add_layer(self._ptr, _prod(self._input_shape), lib.LAYER_INPUT, lib.ACTIVATION_NULL)
+            raise_for_error_code(result, "Failed to add input layer")
+            
+            # Add hidden and output layers; Python layer i is C layer i + 1
+            for i, layer in enumerate(self._layers):
+                if isinstance(layer, Dense):
+                    is_output = (i == len(self._layers) - 1)
+                    layer_type = lib.LAYER_OUTPUT if is_output else lib.LAYER_HIDDEN
+                    result = lib.ann_add_layer(self._ptr, layer.units, layer_type, layer.activation_type)
+                elif isinstance(layer, Conv2D):
+                    result = lib.ann_add_conv2d(self._ptr, layer.filters, layer.kernel_size, layer.strides,
+                                                layer.padding, layer.activation_type)
+                elif isinstance(layer, MaxPool2D):
+                    result = lib.ann_add_maxpool2d(self._ptr, layer.pool_size, layer.strides)
+                elif isinstance(layer, Flatten):
+                    result = lib.ann_add_flatten(self._ptr)
+                else:
+                    raise InvalidParameterError(f"Unsupported layer type {type(layer).__name__}")
+                raise_for_error_code(result, f"Failed to add layer {i} ({type(layer).__name__})")
                 
                 # Set dropout if specified
-                if layer.dropout > 0:
+                if getattr(layer, "dropout", 0.0) > 0:
                     lib.ann_set_layer_dropout(self._ptr, i + 1, layer.dropout)
+        except Exception:
+            lib.ann_free_network(self._ptr)
+            self._ptr = None
+            raise
         
         self._apply_training_settings()
         
         self._built = True
     
+    def _uses_images(self) -> bool:
+        return any(isinstance(layer, (Conv2D, MaxPool2D)) for layer in self._layers)
+
+    def _image_input_shape(self) -> Optional[Tuple[int, int, int]]:
+        """(channels, height, width) of the input when it is an image, else None.
+        
+        A 3-D input shape is an image; a 2-D (height, width) shape is a
+        one-channel image when convolution or pooling layers follow.
+        """
+        shape = self._input_shape
+        if shape is not None and len(shape) == 3:
+            return tuple(shape)
+        if shape is not None and len(shape) == 2 and self._uses_images():
+            return (1, shape[0], shape[1])
+        return None
+
+    def _layer_shapes(self) -> List[Tuple[Layer, Tuple[int, ...], int]]:
+        """(layer, output shape, parameter count) for each layer.
+        
+        Raises:
+            NetworkError: If a layer does not fit the output of the one before
+        """
+        image = self._image_input_shape()
+        if self._uses_images() and image is None:
+            raise NetworkError("Conv2D and MaxPool2D need an image input_shape: (channels, height, width)")
+        shape = image if image is not None else (_prod(self._input_shape),)
+        
+        result = []
+        for i, layer in enumerate(self._layers):
+            name = type(layer).__name__
+            if isinstance(layer, Dense):
+                new_shape = (layer.units,)
+                params = _prod(shape) * layer.units + layer.units
+            elif isinstance(layer, (Conv2D, MaxPool2D)):
+                if len(shape) != 3:
+                    raise NetworkError(f"Layer {i} ({name}) needs an image input, but the layer before outputs {shape}")
+                new_shape = layer.output_shape(shape)
+                params = (layer.filters * (shape[0] * layer.kernel_size ** 2 + 1)
+                          if isinstance(layer, Conv2D) else 0)
+            else:
+                new_shape = (_prod(shape),)
+                params = 0
+            if min(new_shape) < 1:
+                raise NetworkError(f"Layer {i} ({name}) does not fit its input of shape {shape}")
+            result.append((layer, new_shape, params))
+            shape = new_shape
+        return result
+
+    def _as_rows(self, data: ArrayLike, name: str = "x") -> ArrayLike:
+        """Flatten image samples to rows: (N, *input_shape) -> (N, features).
+        
+        A single sample of the input shape becomes one row. Data that is
+        already one row per sample is returned unchanged.
+        """
+        arr = to_array(data)
+        sample = tuple(self._input_shape or ())
+        if not has_numpy() or len(sample) < 2 or arr.ndim <= 2 and arr.shape != sample:
+            return arr
+        if arr.shape == sample:
+            return arr.reshape(1, -1)
+        if tuple(arr.shape[1:]) == sample:
+            return arr.reshape(arr.shape[0], -1)
+        hint = ""
+        if arr.ndim == 4 and len(sample) == 3 and (arr.shape[3], arr.shape[1], arr.shape[2]) == sample:
+            hint = "; the data looks channels-last, use x.transpose(0, 3, 1, 2)"
+        raise ValueError(f"{name} samples have shape {tuple(arr.shape[1:])} but the model expects "
+                         f"{sample} (channels, height, width){hint}")
+
     def _apply_training_settings(self) -> None:
         """Push the optional training settings from compile() to the C network."""
         if self._weight_decay is not None and self._weight_decay > 0:
@@ -313,7 +396,7 @@ class Sequential:
         self.end_online_training()
         
         # Convert data to tensors
-        x_arr = to_array(x)
+        x_arr = self._as_rows(x)
         y_arr = to_array(y)
         
         if has_numpy():
@@ -350,7 +433,7 @@ class Sequential:
         val_tensors = None
         if validation_data is not None:
             x_val, y_val = validation_data
-            val_tensors = (Tensor(to_array(x_val)), Tensor(to_array(y_val)))
+            val_tensors = (Tensor(self._as_rows(x_val, "validation x")), Tensor(to_array(y_val)))
             raise_for_error_code(
                 lib.ann_set_validation_data(self._ptr, val_tensors[0]._ptr, val_tensors[1]._ptr),
                 "Invalid validation data",
@@ -415,7 +498,7 @@ class Sequential:
         
         # libann copies batch_size * units values from these buffers without
         # checking their size, so the shapes must be verified here
-        x_keep, x_rows, x_ptr = _batch_buffer(x, in_units, "x")
+        x_keep, x_rows, x_ptr = _batch_buffer(self._as_rows(x), in_units, "x")
         y_keep, y_rows, y_ptr = _batch_buffer(y, out_units, "y")
         if x_rows != y_rows:
             raise ValueError(f"x has {x_rows} samples but y has {y_rows}")
@@ -481,7 +564,7 @@ class Sequential:
         if not self._built:
             raise NetworkError("Model must be trained before making predictions")
         
-        x_arr = to_array(x)
+        x_arr = self._as_rows(x)
         shape = get_shape(x_arr)
         
         # Handle single sample vs batch
@@ -490,7 +573,7 @@ class Sequential:
             shape = get_shape(x_arr)
         
         n_samples = shape[0]
-        output_size = self._layers[-1].units
+        output_size = lib.ann_get_layer_nodes(self._ptr, lib.ann_get_layer_count(self._ptr) - 1)
         
         self._gpu_upload()
 
@@ -530,7 +613,7 @@ class Sequential:
         if not self._built:
             raise NetworkError("Model must be trained before evaluation")
         
-        x_tensor = Tensor(to_array(x))
+        x_tensor = Tensor(self._as_rows(x))
         y_tensor = Tensor(to_array(y))
         
         accuracy = lib.ann_evaluate_accuracy(self._ptr, x_tensor._ptr, y_tensor._ptr)
@@ -549,7 +632,7 @@ class Sequential:
         if not self._built:
             raise NetworkError("Model must be trained before evaluation")
         
-        x_tensor = Tensor(to_array(x))
+        x_tensor = Tensor(self._as_rows(x))
         y_tensor = Tensor(to_array(y))
         
         loss = lib.ann_evaluate_loss(self._ptr, x_tensor._ptr, y_tensor._ptr)
@@ -603,34 +686,44 @@ class Sequential:
     def _from_ptr(cls, ptr, filepath) -> "Sequential":
         """Wrap a network loaded by libann, rebuilding the Python layer list.
         
-        Only dense layers have a Python counterpart; a file holding other
-        layer kinds (saved by a newer libann) is rejected rather than misread.
+        A layer kind pyann has no class for (saved by a newer libann) is
+        rejected rather than misread.
         """
         n_layers = lib.ann_get_layer_count(ptr)
+        dims = ffi.new("int[3]")
+        settings = ffi.new("int[3]")
+        layers, input_shape = [], None
+        
         for i in range(n_layers):
-            if lib.ann_get_layer_kind(ptr, i) != lib.LAYER_KIND_DENSE:
+            kind = lib.ann_get_layer_kind(ptr, i)
+            lib.ann_get_layer_shape(ptr, i, dims, dims + 1, dims + 2)
+            lib.ann_get_layer_settings(ptr, i, settings, settings + 1, settings + 2)
+            channels, height, width = dims[0], dims[1], dims[2]
+            activation = Activation(lib.ann_get_layer_activation(ptr, i))
+            
+            if i == 0:
+                input_shape = (channels,) if height == width == 1 else (channels, height, width)
+            elif kind == lib.LAYER_KIND_DENSE:
+                layers.append(Dense(lib.ann_get_layer_nodes(ptr, i), activation=activation))
+            elif kind == lib.LAYER_KIND_CONV2D:
+                layers.append(Conv2D(channels, settings[0], settings[1], settings[2], activation=activation))
+            elif kind == lib.LAYER_KIND_MAXPOOL2D:
+                layers.append(MaxPool2D(settings[0], settings[1]))
+            elif kind == lib.LAYER_KIND_FLATTEN:
+                layers.append(Flatten())
+            else:
                 lib.ann_free_network(ptr)
                 raise NetworkError(f"{filepath} contains layer types pyann does not support yet")
         
         # Create model wrapper
         model = cls.__new__(cls)
-        model._layers = []
+        model._layers = layers
         model._optimizer = None
         model._loss = Loss.MSE
         model._name = None
         model._ptr = ptr
         model._built = True
-        model._input_shape = None
-        
-        # Reconstruct layer info from C network
-        for i in range(n_layers):
-            units = lib.ann_get_layer_nodes(ptr, i)
-            activation = lib.ann_get_layer_activation(ptr, i)
-            if i == 0:
-                model._input_shape = (units,)
-            else:
-                model._layers.append(Dense(units, activation=Activation(activation)))
-        
+        model._input_shape = input_shape
         return model
     
     def export_onnx(self, filepath: Union[str, Path]) -> None:
@@ -756,7 +849,7 @@ class Sequential:
             raise NetworkError("Model must be trained before computing confusion matrix")
         
         from pyann.core.tensor import Tensor
-        x_tensor = Tensor(to_array(x))
+        x_tensor = Tensor(self._as_rows(x))
         y_tensor = Tensor(to_array(y))
         
         tp = ffi.new("int *")
@@ -786,17 +879,19 @@ class Sequential:
             lines.append(f"Input shape: {self._input_shape}")
         
         total_params = 0
-        prev_units = self._input_shape[0] if self._input_shape else 0
-        
-        for i, layer in enumerate(self._layers):
+        shapes = self._layer_shapes() if self._input_shape and self._layers else []
+        for layer, shape, params in shapes:
+            total_params += params
             if isinstance(layer, Dense):
-                params = prev_units * layer.units + layer.units  # weights + biases
-                total_params += params
-                lines.append(
-                    f"Dense({layer.units}, {layer.activation or 'linear'})"
-                    f" - {params:,} params"
-                )
-                prev_units = layer.units
+                text = f"Dense({layer.units}, {_activation_name(layer)})"
+            elif isinstance(layer, Conv2D):
+                text = (f"Conv2D({layer.filters}, {layer.kernel_size}x{layer.kernel_size}, stride {layer.strides}, "
+                        f"padding {layer.padding}, {_activation_name(layer)}) -> {shape}")
+            elif isinstance(layer, MaxPool2D):
+                text = f"MaxPool2D({layer.pool_size}x{layer.pool_size}, stride {layer.strides}) -> {shape}"
+            else:
+                text = f"Flatten -> {shape}"
+            lines.append(f"{text} - {params:,} params" if params else text)
         
         lines.append("=" * 50)
         lines.append(f"Total parameters: {total_params:,}")
