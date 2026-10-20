@@ -27,14 +27,14 @@ def trained_model():
     return model, x
 
 
-class NonDenseLib(LibSpy):
-    """Reports layer 1 as a layer kind pyann has no class for."""
+class UnknownKindLib(LibSpy):
+    """Reports layer 1 as a layer kind pyann has no class for (from a newer libann)."""
 
     def __getattr__(self, name):
         if name == "ann_get_layer_kind":
             def kind(ptr, i):
                 self.calls.append((name, (i,)))
-                return 1 if i == 1 else self._real.LAYER_KIND_DENSE
+                return 99 if i == 1 else self._real.LAYER_KIND_DENSE
             return kind
         return super().__getattr__(name)
 
@@ -66,7 +66,7 @@ def test_unsupported_layer_kind_is_rejected_and_freed(tmp_path, monkeypatch):
     path = tmp_path / "model.nna"
     model.save(path)
 
-    lib = NonDenseLib(network_module.lib)
+    lib = UnknownKindLib(network_module.lib)
     monkeypatch.setattr(network_module, "lib", lib)
     with pytest.raises(NetworkError, match="layer types"):
         Sequential.load(path)

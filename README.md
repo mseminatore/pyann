@@ -5,6 +5,7 @@ Python wrapper for the [libann](https://github.com/mseminatore/ann) neural netwo
 ## Features
 
 - **Keras-style API**: Familiar `Sequential` model with `add()`, `fit()`, `predict()`
+- **Layers**: Dense, plus Conv2D, MaxPool2D and Flatten for convolutional networks
 - **Multiple optimizers**: SGD, Momentum, RMSProp, AdaGrad, Adam
 - **Activation functions**: Sigmoid, ReLU, LeakyReLU, Tanh, Softsign, Softmax, GELU
 - **Loss functions**: MSE, Categorical Cross-Entropy
@@ -12,7 +13,7 @@ Python wrapper for the [libann](https://github.com/mseminatore/ann) neural netwo
 - **Learning rate schedulers**: Step decay, Exponential decay, Cosine annealing
 - **Hyperparameter tuning**: Grid search, Random search, Bayesian optimization, TPE (pure-Python searches built on `Sequential`; libann's native hypertuner is not exposed)
 - **NumPy optional**: Works with Python lists, optimized for NumPy arrays
-- **Model persistence**: Save/load in text or binary format, ONNX export/import
+- **Model persistence**: Save/load in text or binary format, ONNX export/import (including CNNs and PyTorch-style ONNX JSON)
 - **Network visualization**: Export architecture as PIKCHR diagrams (renders to SVG)
 - **Regularization**: L1 and L2 (weight decay) regularization, dropout
 - **Evaluation**: Accuracy scoring, confusion matrix with MCC
@@ -130,6 +131,37 @@ model.add(Dense(1, activation='sigmoid'))
 
 model.fit(X, y, epochs=50)
 ```
+
+### Convolutional Networks
+
+Images are channels-first, as in PyTorch and ONNX: a batch has shape
+`(N, channels, height, width)`. Channels-last arrays (Keras' default) need
+`x.transpose(0, 3, 1, 2)` first.
+
+```python
+import numpy as np
+from pyann import Sequential, Input, Conv2D, MaxPool2D, Flatten, Dense
+
+# x: (N, 1, 28, 28) float32 images, y: (N, 10) one-hot labels
+model = Sequential([
+    Input((1, 28, 28)),
+    Conv2D(8, 3, activation='relu'),                  # -> (8, 26, 26)
+    MaxPool2D(2),                                     # -> (8, 13, 13)
+    Conv2D(16, 3, activation='relu'),                 # -> (16, 11, 11)
+    MaxPool2D(2),                                     # -> (16, 5, 5)
+    Flatten(),                                        # -> (400,)
+    Dense(64, activation='relu'),
+    Dense(10, activation='softmax'),
+])
+model.compile(optimizer='adam', loss='cce')
+model.fit(x, y, epochs=10, batch_size=32)
+print(model.summary())
+```
+
+On Fashion-MNIST this network reaches about 90% test accuracy. `predict()`,
+`evaluate()` and `train_on_batch()` take image batches, a single image, or
+flattened rows. Convolutional networks train on the CPU (BLAS-accelerated);
+`enable_gpu()` only speeds up dense networks for now.
 
 ### Learning Rate Scheduling
 
@@ -324,8 +356,16 @@ model.compile(optimizer='adam', loss='mse', gradient_clip=5.0, weight_init='he',
 
 ```python
 Dense(units, activation=None, input_shape=None, dropout=0.0)
-Input(shape)
+Input(shape)              # (features,) or (channels, height, width)
+Conv2D(filters, kernel_size=3, strides=1, padding=0, activation=None, input_shape=None, dropout=0.0)
+MaxPool2D(pool_size=2, strides=None)   # strides default to pool_size; alias MaxPooling2D
+Flatten()                 # optional: Dense layers read image outputs as vectors
 ```
+
+`Conv2D` uses square kernels; `padding` is an int, `'valid'` (0) or `'same'`
+(keeps the size; odd kernel sizes with stride 1). Output size is
+`(size + 2 * padding - kernel_size) // strides + 1`. A model whose layers
+don't fit together raises `NetworkError` when it is built.
 
 ### Optimizers
 

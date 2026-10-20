@@ -16,7 +16,10 @@ typedef enum {
 
 // Layer kinds
 typedef enum {
-    LAYER_KIND_DENSE
+    LAYER_KIND_DENSE,
+    LAYER_KIND_CONV2D,
+    LAYER_KIND_MAXPOOL2D,
+    LAYER_KIND_FLATTEN
 } Layer_kind;
 
 // Activation types
@@ -78,6 +81,7 @@ typedef void (*ErrorLogCallback)(int error_code, const char *error_message, cons
 
 // Build info (pyann_info.c)
 const char *pyann_blas_backend(void);
+const char *pyann_gpu_backend(void);
 
 // CBLAS (only present when built with USE_CBLAS)
 void cblas_init(int threads);
@@ -96,6 +100,10 @@ int ann_predict_batch(const PNetwork pnet, const real *inputs, real *outputs, in
 // Network creation and destruction
 PNetwork ann_make_network(Optimizer_type opt, Loss_type loss_type);
 int ann_add_layer(PNetwork pnet, int node_count, Layer_type layer_type, Activation_type activation_type);
+int ann_add_input(PNetwork pnet, int channels, int height, int width);
+int ann_add_conv2d(PNetwork pnet, int filters, int kernel_size, int stride, int padding, Activation_type activation);
+int ann_add_maxpool2d(PNetwork pnet, int pool_size, int stride);
+int ann_add_flatten(PNetwork pnet);
 void ann_free_network(PNetwork pnet);
 
 // Data loading
@@ -159,6 +167,8 @@ int ann_get_layer_count(const PNetwork pnet);
 int ann_get_layer_nodes(const PNetwork pnet, int layer_index);
 Activation_type ann_get_layer_activation(const PNetwork pnet, int layer_index);
 Layer_kind ann_get_layer_kind(const PNetwork pnet, int layer_index);
+int ann_get_layer_shape(const PNetwork pnet, int layer_index, int *channels, int *height, int *width);
+int ann_get_layer_settings(const PNetwork pnet, int layer_index, int *size, int *stride, int *padding);
 
 // Confusion matrix
 real ann_confusion_matrix(PNetwork pnet, PTensor inputs, PTensor outputs, int *tp, int *fp, int *tn, int *fn);

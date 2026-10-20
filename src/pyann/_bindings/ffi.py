@@ -145,14 +145,20 @@ def _detect_backends(loaded_lib: object, lib_path: str) -> Dict[str, Optional[st
     except (FFIError, AttributeError):
         pass
 
-    # Probe for GPU backends compiled into the library. Each backend exports
-    # a vtable symbol; it is present whether or not a device is available.
-    # cffi can't look up data symbols without a declaration, so use ctypes.
-    probe = ctypes.CDLL(lib_path)
-    for name in ("metal", "cuda"):
-        if hasattr(probe, f"{name}_backend"):
-            info["gpu"] = name
-            break
+    # GPU backend compiled into the library, whether or not a device is
+    # available. pyann_info.c reports it from the build flags.
+    try:
+        name = loaded_lib.pyann_gpu_backend()
+        if name != ffi.NULL:
+            info["gpu"] = ffi.string(name).decode()
+    except (FFIError, AttributeError):
+        # Libraries built before pyann_gpu_backend() exported libann's
+        # backend vtables; cffi can't look up data symbols, so use ctypes
+        probe = ctypes.CDLL(lib_path)
+        for name in ("metal", "cuda"):
+            if hasattr(probe, f"{name}_backend"):
+                info["gpu"] = name
+                break
 
     return info
 
