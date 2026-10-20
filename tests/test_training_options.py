@@ -232,3 +232,37 @@ class TestValidationAndEarlyStopping:
         model.fit(x, y, epochs=1, verbose=0)
         with pytest.raises(InvalidParameterError):
             model.evaluate_loss(x[:, :1], y)
+
+
+def flush_c_stdio():
+    """Flush C's stdout buffer, where libann writes, so capfd sees it."""
+    import ctypes
+    import sys
+    if sys.platform == "win32":
+        ctypes.cdll.ucrtbase.fflush(None)  # MSVC builds use the Universal CRT
+    else:
+        ctypes.CDLL(None).fflush(None)
+
+
+class TestVerbose:
+    """libann prints training progress to C's stdout; verbose=0 must silence it."""
+
+    @staticmethod
+    def _fit_output(capfd, model, verbose):
+        x, y = separable_data()
+        flush_c_stdio()  # drop output earlier tests left in C's buffer
+        capfd.readouterr()
+        model.fit(x, y, epochs=2, batch_size=16, verbose=verbose)
+        flush_c_stdio()  # so capfd sees what this fit() printed
+        return capfd.readouterr().out
+
+    def test_verbose_zero_is_silent(self, capfd):
+        assert self._fit_output(capfd, make_model(), verbose=0) == ""
+
+    def test_verbose_prints_progress(self, capfd):
+        assert "Epoch 2/2" in self._fit_output(capfd, make_model(), verbose=1)
+
+    def test_output_is_restored_after_a_silent_fit(self, capfd):
+        model = make_model()
+        self._fit_output(capfd, model, verbose=0)
+        assert "Epoch 2/2" in self._fit_output(capfd, model, verbose=1)

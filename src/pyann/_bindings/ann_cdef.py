@@ -76,6 +76,9 @@ typedef enum {
 // LR Scheduler callback type
 typedef real(*LRSchedulerFunc)(unsigned epoch, real base_lr, void *user_data);
 
+// Progress output callback type
+typedef void(*Output_func)(const char *);
+
 // Error callback type
 typedef void (*ErrorLogCallback)(int error_code, const char *error_message, const char *function_name);
 
@@ -182,6 +185,8 @@ void ann_clear_history(PNetwork pnet);
 
 // Debug and info
 void ann_print_props(const PNetwork pnet);
+void ann_set_print_function(PNetwork pnet, Output_func print_func);
+Output_func ann_get_print_function(const PNetwork pnet);
 void ann_print_outputs(const PNetwork pnet);
 
 // Error handling
