@@ -8,7 +8,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "pylibann"
-version = "0.3.0"
+version = "0.4.0"
 description = "Keras-like Python API for the libann neural network library (import as pyann)"
 keywords = ["neural network", "machine learning", "keras", "libann", "blas", "gpu"]
 readme = "README.md"
