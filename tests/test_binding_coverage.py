@@ -48,9 +48,6 @@ UNBOUND = {
 
 # Declared in the cdef (so they can be called) but never called by the package.
 UNUSED = {
-    "ann_train_begin": "TODO: online/incremental training is not exposed yet",
-    "ann_train_step": "TODO: online/incremental training is not exposed yet",
-    "ann_train_end": "TODO: online/incremental training is not exposed yet",
     "ann_predict": "superseded by ann_predict_batch, which Sequential.predict uses",
     "ann_gpu_sync_weights": "libann syncs weights back itself after training",
     "ann_set_loss_function": "the loss is chosen when the network is created",
