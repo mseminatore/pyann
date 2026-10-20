@@ -14,6 +14,7 @@ class Activation(IntEnum):
     TANH = 4        # ACTIVATION_TANH
     SOFTSIGN = 5    # ACTIVATION_SOFTSIGN
     SOFTMAX = 6     # ACTIVATION_SOFTMAX
+    GELU = 7        # ACTIVATION_GELU (tanh approximation)
     
     # Aliases for common naming conventions
     LINEAR = 0
@@ -41,6 +42,7 @@ class Activation(IntEnum):
             "tanh": cls.TANH,
             "softsign": cls.SOFTSIGN,
             "softmax": cls.SOFTMAX,
+            "gelu": cls.GELU,
         }
         key = name.lower().replace("-", "_")
         if key not in name_map:

@@ -84,10 +84,15 @@ def cosine_annealing_fn(epoch: int, base_lr: float, params: CosineAnnealing) -> 
 class EarlyStopping:
     """Early stopping callback to halt training when loss stops improving.
     
+    Pass it to ``Sequential.fit(callbacks=[...])``; libann then checks the
+    loss after every epoch. It monitors the validation loss when ``fit()`` is
+    given ``validation_data``, otherwise the training loss.
+    
     Args:
         patience: Number of epochs with no improvement before stopping
         min_delta: Minimum change to qualify as an improvement
-        restore_best: Whether to restore weights from best epoch (not yet supported)
+        restore_best: Whether to restore the weights from the best epoch when
+            training ends
     """
     patience: int = 10
     min_delta: float = 0.0001

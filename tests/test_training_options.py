@@ -4,6 +4,8 @@ import pytest
 
 import pyann.core.network as network_module
 from pyann import Dense, Sequential, WeightInit
+from pyann.callbacks import EarlyStopping
+from pyann.exceptions import InvalidParameterError
 from pyann._bindings.ffi import lib
 from pyann.weight_init import parse_weight_init
 from tests.helpers import LibSpy
@@ -140,3 +142,93 @@ class TestTrainingBehavior:
         model.compile(weight_init=init, gradient_clip=5.0)
         model.fit(x, y, epochs=3, batch_size=16, verbose=0)
         assert np.all(np.isfinite(model.predict(x)))
+
+    def test_gelu_trains(self):
+        rng = np.random.RandomState(2)
+        x = rng.rand(64, 2).astype(np.float32)
+        y = (x.sum(axis=1, keepdims=True) > 1.0).astype(np.float32)
+        model = Sequential()
+        model.add(Dense(8, activation="gelu", input_shape=(2,)))
+        model.add(Dense(1, activation="sigmoid"))
+        model.compile(optimizer="adam", loss="bce", learning_rate=0.05, convergence=0.0)
+        model.fit(x, y, epochs=1, batch_size=16, verbose=0)
+        before = model.evaluate_loss(x, y)
+        model.fit(x, y, epochs=100, batch_size=16, verbose=0)
+        assert model.evaluate_loss(x, y) < before
+
+
+def separable_data(seed=0):
+    rng = np.random.RandomState(seed)
+    x = rng.rand(64, 2).astype(np.float32)
+    y = (x.sum(axis=1, keepdims=True) > 1.0).astype(np.float32)
+    return x, y
+
+
+def curve_rows(model, tmp_path):
+    path = tmp_path / "curve.csv"
+    model.export_learning_curve(path)
+    lines = path.read_text().splitlines()
+    return lines[0].split(","), [line.split(",") for line in lines[1:]]
+
+
+class TestValidationAndEarlyStopping:
+    def test_flipped_validation_stops_early_and_restores_best(self, tmp_path):
+        """Fitting the training labels makes flipped validation labels worse."""
+        x, y = separable_data()
+        model = make_model()
+        model.compile(optimizer="adam", loss="mse", learning_rate=0.05, convergence=0.0)
+        history = model.fit(x, y, epochs=300, batch_size=16, verbose=0,
+                            validation_data=(x, 1.0 - y),
+                            callbacks=[EarlyStopping(patience=5, min_delta=0.0, restore_best=True)])
+
+        header, rows = curve_rows(model, tmp_path)
+        assert header[-1] == "val_loss"
+        assert len(rows) < 300
+        best = history["best_epoch"]
+        assert 1 <= best <= len(rows) - 5
+        # The restored weights are the best epoch's
+        assert history["val_loss"] == pytest.approx(float(rows[best - 1][3]), rel=1e-4)
+        assert history["val_loss"] == pytest.approx(min(float(r[3]) for r in rows), rel=1e-4)
+
+    def test_without_validation_monitors_training_loss(self):
+        x, y = separable_data()
+        model = make_model()
+        model.compile(learning_rate=0.0, convergence=0.0)  # loss never improves
+        history = model.fit(x, y, epochs=100, batch_size=16, verbose=0,
+                            callbacks=[EarlyStopping(patience=3)])
+        assert history["best_epoch"] == 1
+        assert "val_loss" not in history
+
+    def test_settings_do_not_leak_between_fits(self, spy):
+        x, y = separable_data()
+        model = make_model()
+        model.fit(x, y, epochs=2, verbose=0, validation_data=(x, y),
+                  callbacks=[EarlyStopping(patience=4, min_delta=0.01, restore_best=False)])
+        model.fit(x, y, epochs=2, verbose=0)
+
+        stopping = spy.args("ann_set_early_stopping")
+        assert stopping[0][0] == 4 and stopping[0][1] == pytest.approx(0.01) and stopping[0][2] == 0
+        assert stopping[1] == (0, 0.0, 0)
+        # Set before training, detached afterwards so the tensors can be freed
+        validation = spy.args("ann_set_validation_data")
+        assert len(validation) == 2
+        assert validation[1] == (network_module.ffi.NULL, network_module.ffi.NULL)
+
+    def test_validation_metrics_in_history(self):
+        x, y = separable_data()
+        model = make_model()
+        history = model.fit(x, y, epochs=3, verbose=0, validation_data=(x, y))
+        assert history["val_loss"] == pytest.approx(model.evaluate_loss(x, y), rel=1e-5)
+        assert 0.0 <= history["val_accuracy"] <= 1.0
+
+    def test_zero_patience_is_rejected(self):
+        x, y = separable_data()
+        with pytest.raises(InvalidParameterError):
+            make_model().fit(x, y, epochs=2, verbose=0, callbacks=[EarlyStopping(patience=0)])
+
+    def test_evaluate_loss_rejects_wrong_shape(self):
+        x, y = separable_data()
+        model = make_model()
+        model.fit(x, y, epochs=1, verbose=0)
+        with pytest.raises(InvalidParameterError):
+            model.evaluate_loss(x[:, :1], y)

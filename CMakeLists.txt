@@ -49,7 +49,12 @@ set_target_properties(ann PROPERTIES
     POSITION_INDEPENDENT_CODE ON
     C_STANDARD 99
     C_STANDARD_REQUIRED ON
+    # Export only libann's ANN_API functions (and pyann_info.c's PYANN_EXPORT)
+    C_VISIBILITY_PRESET hidden
+    CUDA_VISIBILITY_PRESET hidden
 )
+# ANN_API becomes __declspec(dllexport) on Windows
+target_compile_definitions(ann PRIVATE ANN_BUILDING_DLL)
 # Wheels can't hold the symlinks a versioned library needs, so only
 # versioned in development builds
 if(NOT SKBUILD)
@@ -61,8 +66,6 @@ target_include_directories(ann PUBLIC ${ANN_SOURCE_DIR})
 
 # Platform-specific settings
 if(WIN32)
-    # Windows: export all symbols
-    set_target_properties(ann PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
     set(LIB_OUTPUT_NAME "ann")
 elseif(APPLE)
     set(LIB_OUTPUT_NAME "libann")

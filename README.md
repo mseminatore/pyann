@@ -6,7 +6,7 @@ Python wrapper for the [libann](https://github.com/mseminatore/ann) neural netwo
 
 - **Keras-style API**: Familiar `Sequential` model with `add()`, `fit()`, `predict()`
 - **Multiple optimizers**: SGD, Momentum, RMSProp, AdaGrad, Adam
-- **Activation functions**: Sigmoid, ReLU, LeakyReLU, Tanh, Softsign, Softmax
+- **Activation functions**: Sigmoid, ReLU, LeakyReLU, Tanh, Softsign, Softmax, GELU
 - **Loss functions**: MSE, Categorical Cross-Entropy
 - **Online training**: `train_on_batch()` for streaming data, fine-tuning and custom training loops
 - **Learning rate schedulers**: Step decay, Exponential decay, Cosine annealing
@@ -150,9 +150,14 @@ model.fit(X, y, epochs=100, lr_scheduler=scheduler)
 ```python
 from pyann.callbacks import EarlyStopping
 
-stopping = EarlyStopping(patience=10, min_delta=0.0001)
-model.fit(X, y, epochs=500, callbacks=[stopping])
+stopping = EarlyStopping(patience=10, min_delta=0.0001, restore_best=True)
+history = model.fit(X, y, epochs=500, validation_data=(X_val, y_val), callbacks=[stopping])
+print(history["best_epoch"], history["val_loss"])
 ```
+
+libann measures the validation loss after every epoch and stops once it has not
+improved for `patience` epochs; with `restore_best=True` the model keeps the
+best epoch's weights. Without `validation_data` it monitors the training loss.
 
 ### Online Training and Fine-Tuning
 
@@ -278,13 +283,14 @@ Methods:
 - `end_online_training()` - End the online session started by `train_on_batch()`
 - `predict(x)` - Generate predictions
 - `evaluate(x, y)` - Compute accuracy
+- `evaluate_loss(x, y)` - Compute the loss, averaged like the training loss
 - `confusion_matrix(x, y)` - Compute TP/FP/TN/FN and MCC (binary classification)
 - `save(filepath, format)` - Save model
 - `load(filepath, format)` - Load model (classmethod)
 - `export_onnx(filepath)` - Export to ONNX JSON format
 - `load_onnx(filepath)` - Load from ONNX JSON (classmethod)
 - `export_pikchr(filepath)` - Export architecture as PIKCHR diagram
-- `export_learning_curve(filepath)` - Export training history as CSV
+- `export_learning_curve(filepath)` - Export training history as CSV (adds `val_loss` when `fit()` had validation data)
 - `clear_history()` - Clear training history to free memory
 - `set_weight_decay(lambda_)` - Set L2 regularization coefficient
 - `set_l1_regularization(lambda_)` - Set L1 regularization coefficient
@@ -334,8 +340,9 @@ Adam(lr=0.001)  # Recommended
 ### Loss Functions
 
 ```python
-Loss.MSE                        # Mean Squared Error
+Loss.MSE                        # Mean Squared Error (regression: use a linear output)
 Loss.CATEGORICAL_CROSS_ENTROPY  # For classification
+Loss.BINARY_CROSS_ENTROPY       # Alias of CATEGORICAL_CROSS_ENTROPY, for sigmoid outputs ('bce')
 ```
 
 `CATEGORICAL_CROSS_ENTROPY` needs a softmax output layer (one class per sample) or a sigmoid output layer (binary cross-entropy per output). Training with any other output activation fails.
@@ -350,6 +357,7 @@ Activation.LEAKY_RELU
 Activation.TANH
 Activation.SOFTSIGN
 Activation.SOFTMAX
+Activation.GELU      # tanh approximation; ONNX export uses opset 20
 ```
 
 ### Callbacks
@@ -358,7 +366,7 @@ Activation.SOFTMAX
 StepDecay(step_size, gamma=0.5)          # Multiply LR by gamma every step_size epochs
 ExponentialDecay(gamma=0.95)             # Multiply LR by gamma each epoch
 CosineAnnealing(T_max, min_lr=0.0001)   # Smooth decay to min_lr over T_max epochs
-EarlyStopping(patience=10, min_delta=0.0001)  # Stop when loss stops improving
+EarlyStopping(patience=10, min_delta=0.0001, restore_best=True)  # Stop when (validation) loss stops improving
 ```
 
 ### Hyperparameter Tuning

@@ -40,6 +40,7 @@ UNBOUND = {
         "hypertune_split_data", "hypertune_free_split", "hypertune_grid_search",
         "hypertune_random_search", "hypertune_print_result", "hypertune_print_summary",
         "hypertune_count_grid_trials", "hypertune_generate_topology",
+        "hypertune_create_network", "hypertune_score_accuracy",
         "hypertune_topology_name", "gp_init", "gp_add_observation", "gp_predict",
         "gp_fit_hyperparams", "gp_expected_improvement", "bayesian_options_init",
         "hypertune_bayesian_search", "tpe_options_init", "hypertune_tpe_search",
