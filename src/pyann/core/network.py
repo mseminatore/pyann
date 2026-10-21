@@ -22,6 +22,7 @@ from pyann.exceptions import (
 
 if TYPE_CHECKING:
     import numpy as np
+    from pyann.core.quantized import QuantizedModel
 
 
 def _batch_buffer(data: ArrayLike, columns: int, name: str):
@@ -55,6 +56,27 @@ def _batch_buffer(data: ArrayLike, columns: int, name: str):
             raise ValueError(f"{name} has a row of {len(row)} values but the network expects {columns}")
     buffer = ffi.new("real[]", [v for row in arr for v in row])
     return buffer, rows, buffer
+
+
+def as_rows(data: ArrayLike, input_shape: Optional[Tuple[int, ...]], name: str = "x") -> ArrayLike:
+    """Flatten image samples to rows: (N, *input_shape) -> (N, features).
+    
+    A single sample of the input shape becomes one row. Data that is
+    already one row per sample is returned unchanged.
+    """
+    arr = to_array(data)
+    sample = tuple(input_shape or ())
+    if not has_numpy() or len(sample) < 2 or arr.ndim <= 2 and arr.shape != sample:
+        return arr
+    if arr.shape == sample:
+        return arr.reshape(1, -1)
+    if tuple(arr.shape[1:]) == sample:
+        return arr.reshape(arr.shape[0], -1)
+    hint = ""
+    if arr.ndim == 4 and len(sample) == 3 and (arr.shape[3], arr.shape[1], arr.shape[2]) == sample:
+        hint = "; the data looks channels-last, use x.transpose(0, 3, 1, 2)"
+    raise ValueError(f"{name} samples have shape {tuple(arr.shape[1:])} but the model expects "
+                     f"{sample} (channels, height, width){hint}")
 
 
 def _activation_name(layer) -> str:
@@ -327,24 +349,8 @@ class Sequential:
         return result
 
     def _as_rows(self, data: ArrayLike, name: str = "x") -> ArrayLike:
-        """Flatten image samples to rows: (N, *input_shape) -> (N, features).
-        
-        A single sample of the input shape becomes one row. Data that is
-        already one row per sample is returned unchanged.
-        """
-        arr = to_array(data)
-        sample = tuple(self._input_shape or ())
-        if not has_numpy() or len(sample) < 2 or arr.ndim <= 2 and arr.shape != sample:
-            return arr
-        if arr.shape == sample:
-            return arr.reshape(1, -1)
-        if tuple(arr.shape[1:]) == sample:
-            return arr.reshape(arr.shape[0], -1)
-        hint = ""
-        if arr.ndim == 4 and len(sample) == 3 and (arr.shape[3], arr.shape[1], arr.shape[2]) == sample:
-            hint = "; the data looks channels-last, use x.transpose(0, 3, 1, 2)"
-        raise ValueError(f"{name} samples have shape {tuple(arr.shape[1:])} but the model expects "
-                         f"{sample} (channels, height, width){hint}")
+        """Flatten image samples to rows: (N, *input_shape) -> (N, features)."""
+        return as_rows(data, self._input_shape, name)
 
     def _apply_training_settings(self) -> None:
         """Push the optional training settings from compile() to the C network."""
@@ -763,6 +769,61 @@ class Sequential:
         
         return cls._from_ptr(ptr, filepath)
     
+    def quantize(self, x_calibration: ArrayLike) -> "QuantizedModel":
+        """Make an int8 version of the trained model.
+
+        Runs the model over the calibration samples to find each layer's
+        value range; a few hundred to a few thousand representative training
+        samples are usually enough. The model itself is not changed.
+
+        Args:
+            x_calibration: Input samples, preprocessed like real inputs
+
+        Returns:
+            A QuantizedModel for checking int8 accuracy and exporting C headers
+        """
+        from pyann.core.quantized import QuantizedModel
+
+        if not self._built:
+            raise NetworkError("Model must be trained before quantizing")
+
+        input_size = lib.ann_get_layer_nodes(self._ptr, 0)
+        x_arr = self._as_rows(x_calibration, "x_calibration")
+        shape = get_shape(x_arr)
+        if len(shape) != 2 or shape[0] == 0 or shape[1] != input_size:
+            raise ValueError(f"x_calibration must be samples x {input_size} features, got shape {shape}")
+
+        x_tensor = Tensor(x_arr)    # keep it alive through the call
+        ptr = lib.ann_quantize(self._ptr, x_tensor._ptr)
+        if ptr == ffi.NULL:
+            raise NetworkError("Quantization failed (softmax is supported only on the output layer)")
+        output_size = lib.ann_get_layer_nodes(self._ptr, lib.ann_get_layer_count(self._ptr) - 1)
+        return QuantizedModel(ptr, self._input_shape, input_size, output_size)
+
+    def export_c_header(self, filepath: Union[str, Path], prefix: Optional[str] = None,
+                        runtime: bool = True) -> Path:
+        """Export the model's float32 weights as a self-contained C header.
+
+        For the int8 version, use ``model.quantize(x).export_c_header(...)``.
+        The header defines ``<prefix>_predict(input, output, workspace)`` and
+        ``<prefix>_argmax``, plus size macros. It needs ``ann_rt.h``, which is
+        copied next to it unless ``runtime`` is False.
+
+        Args:
+            filepath: Output file, e.g. ``"model.h"``
+            prefix: C identifier naming the header's symbols (default: from
+                the file name)
+            runtime: Also write ``ann_rt.h`` into the same directory
+
+        Returns:
+            The header's path
+        """
+        from pyann.core.quantized import export_c_header
+
+        if not self._built:
+            raise NetworkError("Cannot export untrained model")
+        return export_c_header(self._ptr, ffi.NULL, filepath, prefix, runtime)
+
     def export_pikchr(self, filepath: Union[str, Path]) -> None:
         """Export network architecture as a PIKCHR diagram.
         
