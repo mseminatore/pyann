@@ -225,6 +225,34 @@ def enable_gpu() -> bool:
     return _backend_info["gpu_active"] is not None
 
 
+def set_num_threads(threads: int) -> None:
+    """Set how many CPU threads libann uses for training and batched inference.
+
+    libann splits its own work (convolution, pooling, activations, optimizer
+    updates, and its matrix multiply when built without BLAS) across this many
+    threads. A BLAS library keeps managing its own threads; the two never run
+    at the same time. Results do not depend on the thread count.
+
+    Args:
+        threads: 1 for single-threaded; 0 restores the default (the
+            ANN_NUM_THREADS environment variable if set, else the number of
+            processors)
+
+    Raises:
+        ValueError: If threads is negative
+    """
+    if not isinstance(threads, int) or isinstance(threads, bool) or threads < 0:
+        raise ValueError(f"threads must be an int >= 0, got {threads!r}")
+    _load_library()
+    _lib.ann_set_num_threads(threads)
+
+
+def get_num_threads() -> int:
+    """Return the number of CPU threads libann uses (the calling thread included)."""
+    _load_library()
+    return _lib.ann_get_num_threads()
+
+
 def gpu_enabled() -> bool:
     """Return True if enable_gpu() has activated a GPU backend."""
     _load_library()
