@@ -44,6 +44,10 @@ set(ANN_SOURCES
 # Create shared library
 add_library(ann SHARED ${ANN_SOURCES})
 
+# libann's CPU worker threads (pthreads; nothing extra on Windows)
+find_package(Threads REQUIRED)
+target_link_libraries(ann PRIVATE Threads::Threads)
+
 # Set properties for shared library
 set_target_properties(ann PROPERTIES
     POSITION_INDEPENDENT_CODE ON

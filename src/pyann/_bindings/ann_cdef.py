@@ -93,6 +93,10 @@ const char *cblas_get_config(void);
 const char *cblas_get_corename(void);
 const char *cblas_get_isa_features(void);
 
+// CPU threads
+void ann_set_num_threads(int threads);
+int ann_get_num_threads(void);
+
 // GPU (only present when built with USE_METAL or USE_CUDA)
 int ann_gpu_init(void);
 int ann_gpu_upload_network(PNetwork pnet);

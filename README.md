@@ -18,7 +18,7 @@ Python wrapper for the [libann](https://github.com/mseminatore/ann) neural netwo
 - **Regularization**: L1 and L2 (weight decay) regularization, dropout
 - **Evaluation**: Accuracy scoring, confusion matrix with MCC
 - **Data utilities**: CSV loading, normalization, one-hot encoding, train/val splitting
-- **Hardware acceleration**: BLAS-accelerated CPU everywhere (Accelerate on macOS, OpenBLAS on Linux and Windows), plus optional GPU inference and training via Metal (macOS) or CUDA
+- **Hardware acceleration**: multithreaded, BLAS-accelerated CPU training everywhere (Accelerate on macOS, OpenBLAS on Linux and Windows), plus optional GPU inference and training via Metal (macOS) or CUDA for dense networks
 
 ## Installation
 
@@ -334,6 +334,8 @@ Methods:
 pyann.backend_info()   # dict: blas, gpu (compiled in), gpu_active, plus CBLAS details when present
 pyann.enable_gpu()     # initialize the GPU backend; returns True if one is active
 pyann.gpu_enabled()    # whether a GPU backend is active
+pyann.set_num_threads(4)   # CPU threads for training/batched inference (0 = default, 1 = single-threaded)
+pyann.get_num_threads()    # current CPU thread count
 ```
 
 #### Training options

@@ -23,6 +23,8 @@ from pyann._bindings.ffi import (
     get_backend_info as backend_info,
     enable_gpu,
     gpu_enabled,
+    set_num_threads,
+    get_num_threads,
 )
 
 __all__ = [
@@ -45,4 +47,6 @@ __all__ = [
     "backend_info",
     "enable_gpu",
     "gpu_enabled",
+    "set_num_threads",
+    "get_num_threads",
 ]
