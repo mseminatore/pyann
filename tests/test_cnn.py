@@ -170,9 +170,10 @@ class TestPersistence:
 
 
 class TestGpu:
-    def test_cnn_trains_on_the_cpu_when_the_gpu_is_enabled(self):
+    def test_cnn_trains_when_the_gpu_is_enabled(self):
         if not pyann.enable_gpu():
             pytest.skip("no GPU backend in this build")
         model, x, y = trained_cnn()
-        assert not model._gpu_uploaded  # libann keeps CNNs on the CPU
+        # Metal runs CNNs; CUDA is dense-only, so libann keeps them on the CPU
+        assert model._gpu_uploaded == (pyann.backend_info()["gpu_active"] == "metal")
         assert model.evaluate(x, y) == 1.0
