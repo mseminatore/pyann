@@ -128,6 +128,19 @@ PNetwork ann_load_network_binary(const char *filename);
 int ann_export_onnx(const PNetwork pnet, const char *filename);
 PNetwork ann_import_onnx(const char *filename);
 
+// int8 quantization and C header export
+typedef struct QuantizedNetwork QuantizedNetwork;
+typedef struct QuantizedNetwork *PQuantizedNetwork;
+PQuantizedNetwork ann_quantize(const PNetwork pnet, const PTensor calibration_inputs);
+void ann_free_quantized(PQuantizedNetwork q);
+int ann_quantized_predict(const PQuantizedNetwork q, const real *inputs, real *outputs);
+int ann_quantized_predict_int8(const PQuantizedNetwork q, const signed char *inputs, signed char *outputs);
+int ann_quantized_get_io_params(const PQuantizedNetwork q, real *in_scale, int *in_zero_point,
+                                real *out_scale, int *out_zero_point);
+real ann_quantized_evaluate_accuracy(const PQuantizedNetwork q, const PTensor inputs, const PTensor outputs);
+int ann_export_c_header(const PNetwork pnet, const PQuantizedNetwork q, const char *filename,
+                        const char *prefix);
+
 // Training and inference
 real ann_train_network(PNetwork pnet, PTensor x_train, PTensor y_train, int rows);
 int ann_train_begin(PNetwork pnet);

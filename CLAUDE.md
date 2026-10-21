@@ -59,4 +59,5 @@ Try a release candidate on TestPyPI first and install it in a clean venv before 
 - **Type hints**: All public APIs use type hints. `TYPE_CHECKING` guard for numpy imports.
 - **C binding prefixes**: `ann_*` for network functions, `tensor_*` for tensor operations (in `_bindings/` CFFI definitions).
 - **Python enum values** (`IntEnum`) must match C enum ordinals exactly.
+- **Quantization / C export**: `core/quantized.py` holds `QuantizedModel` (made by `Sequential.quantize`) and the shared `export_c_header` helper. Exported headers need libann's `ann_rt.h`: wheels install it to `pyann/include/` (CMake `install(FILES ...)`), development builds use `ann/ann_rt.h`; `runtime_header_path()` finds either. `quantize_input` must round exactly like `ann_rt_quantize` in C (float32, halves away from zero).
 - **Binding coverage**: `tests/test_binding_coverage.py` diffs `ann/*.h` against the cdef (functions, signatures, enum values) and against what the package calls. After bumping the `ann/` submodule, a failure means upstream changed: bind the new function, update the cdef, or record the decision in its `UNBOUND` / `UNUSED` / `CDEF_ONLY` tables with a reason.

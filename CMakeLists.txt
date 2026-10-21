@@ -38,6 +38,7 @@ set(ANN_SOURCES
     ${ANN_SOURCE_DIR}/ann.c
     ${ANN_SOURCE_DIR}/tensor.c
     ${ANN_SOURCE_DIR}/json.c
+    ${ANN_SOURCE_DIR}/ann_quantize.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/native/pyann_info.c
 )
 
@@ -232,6 +233,9 @@ if(SKBUILD)
         LIBRARY DESTINATION pyann/lib
         RUNTIME DESTINATION pyann/lib
     )
+    # The runtime exported C headers need (see Sequential.export_c_header);
+    # development builds use the copy in the ann/ submodule
+    install(FILES ${ANN_SOURCE_DIR}/ann_rt.h DESTINATION pyann/include)
     if(USE_SCIPY_OPENBLAS)
         # Ship OpenBLAS (and its runtime dependencies) next to libann so the
         # wheel works without scipy-openblas32 installed, including source

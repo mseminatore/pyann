@@ -14,6 +14,7 @@ except PackageNotFoundError:  # running from a source tree that was never instal
     __version__ = "0+unknown"
 
 from pyann.core.network import Sequential
+from pyann.core.quantized import QuantizedModel, runtime_header_path
 from pyann.core.layers import Dense, Input, Conv2D, MaxPool2D, MaxPooling2D, Flatten
 from pyann.optimizers import Optimizer, SGD, Momentum, RMSProp, AdaGrad, Adam
 from pyann.losses import Loss
@@ -29,6 +30,8 @@ from pyann._bindings.ffi import (
 
 __all__ = [
     "Sequential",
+    "QuantizedModel",
+    "runtime_header_path",
     "Dense",
     "Input",
     "Conv2D",

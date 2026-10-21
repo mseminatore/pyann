@@ -14,6 +14,7 @@ Python wrapper for the [libann](https://github.com/mseminatore/ann) neural netwo
 - **Hyperparameter tuning**: Grid search, Random search, Bayesian optimization, TPE (pure-Python searches built on `Sequential`; libann's native hypertuner is not exposed)
 - **NumPy optional**: Works with Python lists, optimized for NumPy arrays
 - **Model persistence**: Save/load in text or binary format, ONNX export/import (including CNNs and PyTorch-style ONNX JSON)
+- **Deploy to microcontrollers**: Quantize a trained model to int8 and export it as a standalone C header (integer-only inference, no `malloc`), or export float32 weights
 - **Network visualization**: Export architecture as PIKCHR diagrams (renders to SVG)
 - **Regularization**: L1 and L2 (weight decay) regularization, dropout
 - **Evaluation**: Accuracy scoring, confusion matrix with MCC
@@ -268,6 +269,38 @@ loaded = Sequential.load('model.nna')
 loaded = Sequential.load_onnx('model.onnx.json')  # From ONNX
 ```
 
+### int8 Quantization and C Export
+
+Quantize a trained model to int8, check its accuracy, and export it as a C
+header for a microcontroller or any C program. The header runs on `ann_rt.h`
+(copied next to it): integer-only math, no `malloc`, no libc needed for the
+int8 path. On Fashion-MNIST, int8 accuracy stays within 0.2 points of float32
+with 4x less parameter memory.
+
+```python
+q = model.quantize(x_train[:1000])        # calibrate on representative inputs
+print(model.evaluate(x_test, y_test), q.evaluate(x_test, y_test))
+
+q.export_c_header('model.h')              # writes model.h and ann_rt.h
+model.export_c_header('model_f.h')        # float32 weights instead
+```
+
+On the device:
+
+```c
+#include "model.h"
+
+static int8_t workspace[MODEL_WORKSPACE_SIZE];
+int8_t scores[MODEL_OUTPUT_SIZE];
+model_predict(input_q, scores, workspace);  /* MODEL_INPUT_SIZE int8 values */
+int label = model_argmax(scores);
+```
+
+`q.quantize_input(x)` gives the int8 inputs the device expects, and
+`q.predict_int8(x_q)` returns exactly what the header computes. See libann's
+[C export guide](https://github.com/mseminatore/ann/blob/main/docs/C_EXPORT.md)
+for the scheme and generated API.
+
 ### Network Visualization
 
 ```python
@@ -321,12 +354,27 @@ Methods:
 - `load(filepath, format)` - Load model (classmethod)
 - `export_onnx(filepath)` - Export to ONNX JSON format
 - `load_onnx(filepath)` - Load from ONNX JSON (classmethod)
+- `quantize(x_calibration)` - Make an int8 `QuantizedModel`
+- `export_c_header(filepath, prefix=None, runtime=True)` - Export float32 weights as a C header (and copy `ann_rt.h` next to it)
 - `export_pikchr(filepath)` - Export architecture as PIKCHR diagram
 - `export_learning_curve(filepath)` - Export training history as CSV (adds `val_loss` when `fit()` had validation data)
 - `clear_history()` - Clear training history to free memory
 - `set_weight_decay(lambda_)` - Set L2 regularization coefficient
 - `set_l1_regularization(lambda_)` - Set L1 regularization coefficient
 - `summary()` - Get model summary
+
+### QuantizedModel
+
+Made by `Sequential.quantize()`; independent of the model it came from.
+
+- `predict(x)` - Real in and out, int8 inside (matches the header's `<prefix>_predict_float`)
+- `predict_int8(x_q)` - int8 in and out (matches the header's `<prefix>_predict` bit for bit)
+- `quantize_input(x)` / `dequantize_output(y_q)` - Convert between real and int8 values
+- `evaluate(x, y)` - Accuracy of the int8 model
+- `export_c_header(filepath, prefix=None, runtime=True)` - Export the int8 model as a C header
+- `input_scale`, `input_zero_point`, `output_scale`, `output_zero_point` - Quantization: `real = scale * (q - zero_point)`
+
+`pyann.runtime_header_path()` gives the path of the bundled `ann_rt.h`.
 
 ### Backend
 
