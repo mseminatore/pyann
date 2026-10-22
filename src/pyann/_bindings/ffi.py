@@ -1,6 +1,7 @@
 """CFFI FFI setup and library loading."""
 
 import ctypes
+import logging
 import os
 import sys
 from pathlib import Path
@@ -10,7 +11,7 @@ from cffi import FFI, FFIError
 
 from pyann._bindings.tensor_cdef import TENSOR_CDEF
 from pyann._bindings.ann_cdef import ANN_CDEF
-from pyann.exceptions import LibraryNotFoundError
+from pyann.exceptions import LibraryNotFoundError, record_c_error
 
 # Create FFI instance
 ffi = FFI()
@@ -24,6 +25,29 @@ _lib: Optional[object] = None
 
 # Detected backend info (populated on library load)
 _backend_info: Optional[Dict[str, Optional[str]]] = None
+
+_logger = logging.getLogger("pyann")
+
+
+def _on_c_error(code, message, function):
+    """libann's error log callback: keep the error for the exception, and log it.
+
+    Without a callback libann prints errors to stderr, which Python code
+    can't catch or silence; the exception that follows carries them instead.
+    """
+    message = ffi.string(message).decode(errors="replace") if message != ffi.NULL else ""
+    function = ffi.string(function).decode(errors="replace") if function != ffi.NULL else "libann"
+    record_c_error(code, message, function)
+    _logger.debug("libann error %d in %s: %s", code, function, message)
+
+
+# Kept at module level: libann holds only a pointer to it
+try:
+    _error_callback = ffi.callback("ErrorLogCallback", _on_c_error)
+except MemoryError:
+    # No executable memory for callbacks (some hardened runtimes): libann
+    # keeps its default of printing errors to stderr
+    _error_callback = None
 
 
 def _find_library() -> str:
@@ -192,6 +216,8 @@ def _load_library() -> object:
         _preload_windows_dependencies(Path(lib_path))
     _lib = ffi.dlopen(lib_path)
     _backend_info = _detect_backends(_lib, lib_path)
+    if _error_callback is not None:
+        _lib.ann_set_error_log_callback(_error_callback)
 
     return _lib
 

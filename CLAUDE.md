@@ -54,7 +54,7 @@ Try a release candidate on TestPyPI first and install it in a clean venv before 
 ## Conventions
 
 - **Enum + string API**: Activations, losses, and optimizers accept both enum values (`Activation.RELU`) and strings (`"relu"`). Parsing helpers (`parse_optimizer`, `parse_loss`, `parse_activation`) handle conversion.
-- **Error handling**: C errors are translated via `raise_for_error_code()` in `exceptions.py`. Python-side validation uses `ValueError`/`TypeError`.
+- **Error handling**: C errors are translated via `raise_for_error_code()` in `exceptions.py`. Python-side validation uses `ValueError`/`TypeError`. `_bindings/ffi.py` installs libann's error log callback when the library loads (otherwise libann prints errors to stderr); it records the last error per thread and logs it to the `pyann` logger at DEBUG. `raise_for_error_code` appends that error to the exception message when its code matches; for calls that signal failure by returning `NULL`, call `clear_c_error()` before and wrap the message in `c_error_message()`. The callback is process-wide, so it also replaces the stderr output of any other code in the process that uses the same libann.
 - **Test style**: pytest with class-based grouping (`class TestDense:`). Each class covers one component.
 - **Type hints**: All public APIs use type hints. `TYPE_CHECKING` guard for numpy imports.
 - **C binding prefixes**: `ann_*` for network functions, `tensor_*` for tensor operations (in `_bindings/` CFFI definitions).

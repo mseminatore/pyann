@@ -161,8 +161,9 @@ print(model.summary())
 
 On Fashion-MNIST this network reaches about 90% test accuracy. `predict()`,
 `evaluate()` and `train_on_batch()` take image batches, a single image, or
-flattened rows. Convolutional networks train on the CPU (BLAS-accelerated);
-`enable_gpu()` only speeds up dense networks for now.
+flattened rows. With `enable_gpu()`, convolutional networks run on the GPU
+with Metal; the CUDA backend is dense-only, so with CUDA they train on the CPU
+(BLAS-accelerated).
 
 ### Learning Rate Scheduling
 
@@ -470,12 +471,22 @@ TPESearch(space, n_trials=50, n_startup=10, gamma=0.25)  # Tree-structured Parze
 
 All accept a `HyperparamSpace` and return `(best_result, all_results)` from `run()`.
 
+### Errors
+
+Failures raise exceptions derived from `pyann.exceptions.PyANNError` (`NetworkError`, `InvalidParameterError`, `AllocationError`, `IOError`); bad arguments raise `ValueError` or `TypeError`. When libann reports the error, the message names the C function, for example `NetworkError: Failed to load model from model.nna (ann_load_network: File I/O error)`. pyann prints nothing to stderr; to see libann's errors as they happen, enable the `pyann` logger at DEBUG level:
+
+```python
+import logging
+logging.basicConfig()
+logging.getLogger("pyann").setLevel(logging.DEBUG)
+```
+
 ## What's Not Exposed
 
 pyann covers libann's training, inference, persistence, regularization and GPU features. These parts of libann's C API have no Python equivalent yet:
 
 - **libann's native hypertuner** (`ann_hypertune.h`). `pyann.hypertune` is a separate Python implementation, so its search spaces and results differ from the C one (for example topology names, per-layer activation search, and the Gaussian-process settings).
-- **Error-log callbacks**: errors surface as Python exceptions instead.
+- **Error-log callbacks**: pyann installs its own, so libann errors surface in the Python exception instead of on stderr (see [Errors](#errors)).
 - **Tensor math** (gemm, elementwise ops and so on): use NumPy.
 
 `tests/test_binding_coverage.py` keeps this list honest. It compares libann's headers with the bindings and fails when upstream adds, removes or changes a function without a matching decision recorded there.

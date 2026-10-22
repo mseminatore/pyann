@@ -17,7 +17,7 @@ from pyann.callbacks import (
 from pyann.utils.compat import ArrayLike, has_numpy, to_array, get_shape
 from pyann.exceptions import (
     NetworkError, InvalidParameterError, AllocationError,
-    raise_for_error_code
+    raise_for_error_code, clear_c_error, c_error_message
 )
 
 if TYPE_CHECKING:
@@ -686,13 +686,14 @@ class Sequential:
         """
         filepath = str(filepath)
         
+        clear_c_error()
         if format == "binary":
             ptr = lib.ann_load_network_binary(filepath.encode())
         else:
             ptr = lib.ann_load_network(filepath.encode())
         
         if ptr == ffi.NULL:
-            raise NetworkError(f"Failed to load model from {filepath}")
+            raise NetworkError(c_error_message(f"Failed to load model from {filepath}"))
         
         return cls._from_ptr(ptr, filepath)
     
@@ -762,10 +763,11 @@ class Sequential:
         Returns:
             Loaded Sequential model
         """
+        clear_c_error()
         ptr = lib.ann_import_onnx(str(filepath).encode())
         
         if ptr == ffi.NULL:
-            raise NetworkError(f"Failed to load ONNX model from {filepath}")
+            raise NetworkError(c_error_message(f"Failed to load ONNX model from {filepath}"))
         
         return cls._from_ptr(ptr, filepath)
     
