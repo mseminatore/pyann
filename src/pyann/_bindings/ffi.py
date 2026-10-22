@@ -227,11 +227,20 @@ def get_backend_info() -> Dict[str, Optional[str]]:
 
     Returns:
         Dict with keys: blas, gpu (backend compiled in), gpu_active
-        (backend in use after enable_gpu(), else None), cblas_config, cblas_corename, cblas_isa.
-        Values are None when the corresponding backend is not compiled in.
+        (backend in use after enable_gpu(), else None), cblas_config, cblas_corename, cblas_isa
+        (None when the corresponding backend is not compiled in), threads (CPU
+        threads libann uses), and optimized (False for an unoptimized, e.g.
+        Debug, build of libann, which trains much slower).
     """
     _load_library()
-    return dict(_backend_info)
+    info = dict(_backend_info)
+    build = ffi.new("Backend_info *")
+    if _lib.ann_get_backend_info(build) == 0:
+        info["threads"] = build.threads
+        info["optimized"] = bool(build.optimized)
+        if info["blas"] is None and ffi.string(build.blas).decode() != "none":
+            info["blas"] = ffi.string(build.blas).decode().lower()
+    return info
 
 
 def enable_gpu() -> bool:

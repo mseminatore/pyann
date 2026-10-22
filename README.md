@@ -5,7 +5,8 @@ Python wrapper for the [libann](https://github.com/mseminatore/ann) neural netwo
 ## Features
 
 - **Keras-style API**: Familiar `Sequential` model with `add()`, `fit()`, `predict()`
-- **Layers**: Dense, plus Conv2D, MaxPool2D and Flatten for convolutional networks
+- **Layers**: Dense, plus Conv2D, MaxPool2D and Flatten for convolutional networks, and UpSample2D and Reshape for decoders (autoencoders)
+- **Input noise** for denoising autoencoders: Gaussian, masking or salt-and-pepper
 - **Multiple optimizers**: SGD, Momentum, RMSProp, AdaGrad, Adam
 - **Activation functions**: Sigmoid, ReLU, LeakyReLU, Tanh, Softsign, Softmax, GELU
 - **Loss functions**: MSE, Categorical Cross-Entropy
@@ -164,6 +165,40 @@ On Fashion-MNIST this network reaches about 90% test accuracy. `predict()`,
 flattened rows. With `enable_gpu()`, convolutional networks run on the GPU
 with Metal; the CUDA backend is dense-only, so with CUDA they train on the CPU
 (BLAS-accelerated).
+
+### Autoencoders and Denoising
+
+`UpSample2D` (nearest-neighbour, the counterpart of `MaxPool2D`) and `Reshape`
+(e.g. a Dense bottleneck back to an image) build decoders. Targets can be
+images too, so an autoencoder trains with `fit(x, x)`. With input noise the
+model sees corrupted inputs and learns to output the clean ones:
+
+```python
+from pyann import Sequential, Input, Conv2D, MaxPool2D, UpSample2D
+
+model = Sequential([
+    Input((1, 28, 28)),
+    Conv2D(16, 3, padding='same', activation='relu'),
+    MaxPool2D(2),                                       # -> (16, 14, 14)
+    Conv2D(8, 3, padding='same', activation='relu'),
+    MaxPool2D(2),                                       # -> (8, 7, 7)
+    UpSample2D(2),                                      # -> (8, 14, 14)
+    Conv2D(16, 3, padding='same', activation='relu'),
+    UpSample2D(2),                                      # -> (16, 28, 28)
+    Conv2D(1, 3, padding='same', activation='sigmoid'), # -> (1, 28, 28)
+])
+model.compile(optimizer='adam', loss='bce', learning_rate=0.002, convergence=0.0)
+model.set_input_noise('gaussian', 0.3, clip=(0, 1))     # or 'masking', 'salt_pepper'
+model.fit(x_train, x_train, epochs=5, batch_size=32)    # x: (N, 1, 28, 28) in [0, 1]
+
+noisy = model.apply_input_noise(x_test)                 # corrupted like the training inputs
+denoised = model.predict(noisy)                         # (N, 1, 28, 28): image outputs come back as images
+```
+
+Noise is drawn fresh for every training batch (in `fit()` and
+`train_on_batch()`); `predict()` and `evaluate()` use the inputs as given,
+and the setting is not saved with the model. All layers, and noise, run on the
+GPU with Metal.
 
 ### Learning Rate Scheduling
 
@@ -347,7 +382,7 @@ Methods:
 - `fit(x, y, epochs, batch_size, ...)` - Train the model
 - `train_on_batch(x, y)` - One training step on a mini-batch; returns the loss
 - `end_online_training()` - End the online session started by `train_on_batch()`
-- `predict(x)` - Generate predictions
+- `predict(x)` - Generate predictions: `(samples, outputs)`, or `(samples, channels, height, width)` when the output layer produces an image (Conv2D, MaxPool2D, UpSample2D or Reshape)
 - `evaluate(x, y)` - Compute accuracy
 - `evaluate_loss(x, y)` - Compute the loss, averaged like the training loss
 - `confusion_matrix(x, y)` - Compute TP/FP/TN/FN and MCC (binary classification)
@@ -362,14 +397,17 @@ Methods:
 - `clear_history()` - Clear training history to free memory
 - `set_weight_decay(lambda_)` - Set L2 regularization coefficient
 - `set_l1_regularization(lambda_)` - Set L1 regularization coefficient
+- `set_input_noise(noise, amount, clip=None)` - Corrupt training inputs: `'gaussian'`, `'masking'`, `'salt_pepper'` or `None`; see [Autoencoders and Denoising](#autoencoders-and-denoising)
+- `input_noise` - The noise setting as `(noise, amount, clip)`, or `None`
+- `apply_input_noise(x)` - A copy of `x` with the input noise applied
 - `summary()` - Get model summary
 
 ### QuantizedModel
 
 Made by `Sequential.quantize()`; independent of the model it came from.
 
-- `predict(x)` - Real in and out, int8 inside (matches the header's `<prefix>_predict_float`)
-- `predict_int8(x_q)` - int8 in and out (matches the header's `<prefix>_predict` bit for bit)
+- `predict(x)` - Real in and out, int8 inside (matches the header's `<prefix>_predict_float`); shaped like `Sequential.predict()`, so image outputs come back as `(N, C, H, W)`
+- `predict_int8(x_q)` - int8 in and out (matches the header's `<prefix>_predict` bit for bit); one row per sample, like the header's buffers
 - `quantize_input(x)` / `dequantize_output(y_q)` - Convert between real and int8 values
 - `evaluate(x, y)` - Accuracy of the int8 model
 - `export_c_header(filepath, prefix=None, runtime=True)` - Export the int8 model as a C header
@@ -380,7 +418,7 @@ Made by `Sequential.quantize()`; independent of the model it came from.
 ### Backend
 
 ```python
-pyann.backend_info()   # dict: blas, gpu (compiled in), gpu_active, plus CBLAS details when present
+pyann.backend_info()   # dict: blas, gpu (compiled in), gpu_active, threads, optimized, plus CBLAS details when present
 pyann.enable_gpu()     # initialize the GPU backend; returns True if one is active
 pyann.gpu_enabled()    # whether a GPU backend is active
 pyann.set_num_threads(4)   # CPU threads for training/batched inference (0 = default, 1 = single-threaded)
@@ -411,6 +449,8 @@ Input(shape)              # (features,) or (channels, height, width)
 Conv2D(filters, kernel_size=3, strides=1, padding=0, activation=None, input_shape=None, dropout=0.0)
 MaxPool2D(pool_size=2, strides=None)   # strides default to pool_size; alias MaxPooling2D
 Flatten()                 # optional: Dense layers read image outputs as vectors
+UpSample2D(size=2)        # nearest-neighbour: (C, H, W) -> (C, H*size, W*size); alias UpSampling2D
+Reshape(target_shape)     # same values as (channels, height, width), e.g. after a Dense layer
 ```
 
 `Conv2D` uses square kernels; `padding` is an int, `'valid'` (0) or `'same'`

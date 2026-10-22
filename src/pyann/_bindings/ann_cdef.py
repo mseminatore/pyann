@@ -19,7 +19,9 @@ typedef enum {
     LAYER_KIND_DENSE,
     LAYER_KIND_CONV2D,
     LAYER_KIND_MAXPOOL2D,
-    LAYER_KIND_FLATTEN
+    LAYER_KIND_FLATTEN,
+    LAYER_KIND_UPSAMPLE2D,
+    LAYER_KIND_RESHAPE
 } Layer_kind;
 
 // Activation types
@@ -33,6 +35,14 @@ typedef enum {
     ACTIVATION_SOFTMAX,
     ACTIVATION_GELU
 } Activation_type;
+
+// Input noise types
+typedef enum {
+    NOISE_NONE,
+    NOISE_GAUSSIAN,
+    NOISE_MASKING,
+    NOISE_SALT_PEPPER
+} Noise_type;
 
 // Loss function types
 typedef enum {
@@ -97,6 +107,17 @@ const char *cblas_get_isa_features(void);
 void ann_set_num_threads(int threads);
 int ann_get_num_threads(void);
 
+// Build and backend info
+typedef struct {
+    const char *blas;
+    const char *gpu;
+    int gpu_active;
+    int threads;
+    int real_bytes;
+    int optimized;
+} Backend_info;
+int ann_get_backend_info(Backend_info *info);
+
 // GPU (only present when built with USE_METAL or USE_CUDA)
 int ann_gpu_init(void);
 int ann_gpu_upload_network(PNetwork pnet);
@@ -111,6 +132,8 @@ int ann_add_input(PNetwork pnet, int channels, int height, int width);
 int ann_add_conv2d(PNetwork pnet, int filters, int kernel_size, int stride, int padding, Activation_type activation);
 int ann_add_maxpool2d(PNetwork pnet, int pool_size, int stride);
 int ann_add_flatten(PNetwork pnet);
+int ann_add_upsample2d(PNetwork pnet, int scale);
+int ann_add_reshape(PNetwork pnet, int channels, int height, int width);
 void ann_free_network(PNetwork pnet);
 
 // Data loading
@@ -163,6 +186,9 @@ void ann_set_gradient_clip(PNetwork pnet, real max_gradient);
 void ann_set_dropout(PNetwork pnet, real rate);
 void ann_set_layer_dropout(PNetwork pnet, int layer_index, real rate);
 void ann_set_training_mode(PNetwork pnet, int is_training);
+int ann_set_input_noise(PNetwork pnet, Noise_type type, real amount, real low, real high);
+int ann_get_input_noise(const PNetwork pnet, Noise_type *type, real *amount, real *low, real *high);
+int ann_apply_input_noise(const PNetwork pnet, real *values, int count);
 void ann_set_weight_init(PNetwork pnet, Weight_init_type init_type);
 
 // Regularization

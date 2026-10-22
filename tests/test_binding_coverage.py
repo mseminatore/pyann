@@ -56,6 +56,7 @@ UNUSED = {
     "ann_get_error_log_callback": "pyann installs its own callback; errors raise",
     "ann_clear_error_log_callback": "pyann installs its own callback; errors raise",
     "ann_strerror": "error messages come from pyann.exceptions",
+    "ann_get_input_noise": "Sequential keeps the noise settings and pushes them with ann_set_input_noise",
     "ann_print_props": "debug printing; use Sequential.summary()",
     "ann_print_outputs": "debug printing",
     "ann_print_confusion_matrix": "debug printing; use Sequential.confusion_matrix()",
