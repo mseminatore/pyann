@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Optional, Tuple, Union
 
 from pyann._bindings.ffi import ffi, lib
-from pyann.core.network import as_rows
+from pyann.core.network import as_images, as_rows
 from pyann.core.tensor import Tensor
 from pyann.utils.compat import ArrayLike, has_numpy, to_array
 from pyann.exceptions import InvalidParameterError, NetworkError, raise_for_error_code
@@ -69,9 +69,11 @@ class QuantizedModel:
         q.export_c_header("model.h")      # writes model.h and ann_rt.h
     """
 
-    def __init__(self, ptr, input_shape: Optional[Tuple[int, ...]], input_size: int, output_size: int):
+    def __init__(self, ptr, input_shape: Optional[Tuple[int, ...]], input_size: int, output_size: int,
+                 output_shape: Optional[Tuple[int, ...]] = None):
         self._ptr = ptr
         self._input_shape = input_shape
+        self._output_shape = output_shape
         self.input_size = input_size
         self.output_size = output_size
 
@@ -107,7 +109,9 @@ class QuantizedModel:
         The results match the exported header's ``<prefix>_predict_float``.
 
         Returns:
-            Predictions, (samples x outputs)
+            Predictions, (samples x outputs), or (samples, channels, height,
+            width) for a model whose output is an image, as Sequential.predict
+            returns them
         """
         rows = self._rows(x, "x", self.input_size)
         if has_numpy():
@@ -120,7 +124,7 @@ class QuantizedModel:
                 result = lib.ann_quantized_predict(self._ptr, src + r * self.input_size,
                                                    dst + r * self.output_size)
                 raise_for_error_code(result, "Quantized prediction failed")
-            return out
+            return as_images(out, self._output_shape)
 
         inputs = ffi.new("real[]", self.input_size)
         outputs = ffi.new("real[]", self.output_size)
@@ -131,7 +135,7 @@ class QuantizedModel:
             raise_for_error_code(lib.ann_quantized_predict(self._ptr, inputs, outputs),
                                  "Quantized prediction failed")
             results.append([outputs[k] for k in range(self.output_size)])
-        return results
+        return as_images(results, self._output_shape)
 
     def quantize_input(self, x: ArrayLike) -> ArrayLike:
         """Quantize real inputs to the model's int8 input: round(x / scale) + zero_point.

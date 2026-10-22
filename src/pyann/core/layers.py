@@ -233,3 +233,56 @@ class Flatten(Layer):
     an ONNX Flatten node.
     """
     name: Optional[str] = None
+
+
+@dataclass
+class UpSample2D(Layer):
+    """2-D nearest-neighbour upsampling, applied to each channel.
+    
+    Each value is repeated in a ``size`` x ``size`` block, so the output is
+    (channels, height * size, width * size). The decoder's counterpart to
+    MaxPool2D, e.g. in autoencoders; maps to an ONNX Resize node.
+    
+    Args:
+        size: Integer scale for height and width (int, or a pair of equal ints)
+        name: Optional layer name
+    """
+    size: Union[int, Tuple[int, int]] = 2
+    name: Optional[str] = None
+
+    def __post_init__(self):
+        self.size = _pair(self.size, "size")
+        if self.size <= 0:
+            raise ValueError(f"size must be positive, got {self.size}")
+
+    def output_shape(self, input_shape: Tuple[int, int, int]) -> Tuple[int, int, int]:
+        """Output (channels, height, width) for an input of the given shape."""
+        c, h, w = input_shape
+        return (c, h * self.size, w * self.size)
+
+
+#: Keras-style alias
+UpSampling2D = UpSample2D
+
+
+@dataclass
+class Reshape(Layer):
+    """Give the previous layer's values the shape (channels, height, width).
+    
+    The values stay in place (channels, then rows, then columns), so this
+    turns e.g. a Dense layer of C*H*W units into an image that Conv2D,
+    MaxPool2D and UpSample2D layers can use. Maps to an ONNX Reshape node.
+    
+    Args:
+        target_shape: (channels, height, width); its size must equal the
+            previous layer's
+        name: Optional layer name
+    """
+    target_shape: Tuple[int, int, int]
+    name: Optional[str] = None
+
+    def __post_init__(self):
+        shape = tuple(self.target_shape)
+        if len(shape) != 3 or not all(isinstance(d, int) and not isinstance(d, bool) and d > 0 for d in shape):
+            raise ValueError(f"target_shape must be (channels, height, width) of positive ints, got {self.target_shape}")
+        self.target_shape = shape

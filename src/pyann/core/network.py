@@ -4,7 +4,7 @@ from typing import Optional, Union, List, Tuple, TYPE_CHECKING
 from pathlib import Path
 
 from pyann._bindings.ffi import ffi, lib, gpu_enabled
-from pyann.core.layers import Layer, Dense, Input, Conv2D, MaxPool2D, Flatten, parse_layer
+from pyann.core.layers import Layer, Dense, Input, Conv2D, MaxPool2D, Flatten, UpSample2D, Reshape, parse_layer
 from pyann.core.tensor import Tensor
 from pyann.activations import Activation
 from pyann.losses import Loss, parse_loss
@@ -85,6 +85,21 @@ def _activation_name(layer) -> str:
     return "linear" if act == Activation.NONE else act.name.lower()
 
 
+# names accepted by Sequential.set_input_noise()
+_NOISE_TYPES = {"gaussian": "NOISE_GAUSSIAN", "masking": "NOISE_MASKING", "salt_pepper": "NOISE_SALT_PEPPER"}
+
+
+def as_images(rows: ArrayLike, output_shape: Optional[Tuple[int, ...]]) -> ArrayLike:
+    """Rows of a model's outputs as (N, channels, height, width) when the
+    output is an image (output_shape has 3 dims); otherwise unchanged."""
+    if output_shape is None or len(output_shape) != 3:
+        return rows
+    if has_numpy():
+        return rows.reshape((len(rows),) + tuple(output_shape))
+    c, h, w = output_shape
+    return [[[row[(k * h + i) * w:(k * h + i + 1) * w] for i in range(h)] for k in range(c)] for row in rows]
+
+
 def _prod(shape) -> int:
     result = 1
     for d in shape:
@@ -121,6 +136,7 @@ class Sequential:
     _weight_init: Optional[WeightInit] = None
     _convergence: Optional[float] = None
     _dropout: Optional[float] = None
+    _noise: Optional[Tuple[str, float, float, float]] = None
 
     def __init__(
         self,
@@ -284,6 +300,10 @@ class Sequential:
                     result = lib.ann_add_maxpool2d(self._ptr, layer.pool_size, layer.strides)
                 elif isinstance(layer, Flatten):
                     result = lib.ann_add_flatten(self._ptr)
+                elif isinstance(layer, UpSample2D):
+                    result = lib.ann_add_upsample2d(self._ptr, layer.size)
+                elif isinstance(layer, Reshape):
+                    result = lib.ann_add_reshape(self._ptr, *layer.target_shape)
                 else:
                     raise InvalidParameterError(f"Unsupported layer type {type(layer).__name__}")
                 raise_for_error_code(result, f"Failed to add layer {i} ({type(layer).__name__})")
@@ -301,7 +321,14 @@ class Sequential:
         self._built = True
     
     def _uses_images(self) -> bool:
-        return any(isinstance(layer, (Conv2D, MaxPool2D)) for layer in self._layers)
+        """Whether the input must be an image: a Conv2D, MaxPool2D or UpSample2D
+        layer reads it before any Reshape makes an image of its own."""
+        for layer in self._layers:
+            if isinstance(layer, Reshape):
+                return False
+            if isinstance(layer, (Conv2D, MaxPool2D, UpSample2D)):
+                return True
+        return False
 
     def _image_input_shape(self) -> Optional[Tuple[int, int, int]]:
         """(channels, height, width) of the input when it is an image, else None.
@@ -324,7 +351,7 @@ class Sequential:
         """
         image = self._image_input_shape()
         if self._uses_images() and image is None:
-            raise NetworkError("Conv2D and MaxPool2D need an image input_shape: (channels, height, width)")
+            raise NetworkError("Conv2D, MaxPool2D and UpSample2D need an image input_shape: (channels, height, width)")
         shape = image if image is not None else (_prod(self._input_shape),)
         
         result = []
@@ -333,7 +360,13 @@ class Sequential:
             if isinstance(layer, Dense):
                 new_shape = (layer.units,)
                 params = _prod(shape) * layer.units + layer.units
-            elif isinstance(layer, (Conv2D, MaxPool2D)):
+            elif isinstance(layer, Reshape):
+                if _prod(layer.target_shape) != _prod(shape):
+                    raise NetworkError(f"Layer {i} (Reshape) to {layer.target_shape} needs {_prod(layer.target_shape)} "
+                                       f"values, but the layer before outputs {_prod(shape)}")
+                new_shape = layer.target_shape
+                params = 0
+            elif isinstance(layer, (Conv2D, MaxPool2D, UpSample2D)):
                 if len(shape) != 3:
                     raise NetworkError(f"Layer {i} ({name}) needs an image input, but the layer before outputs {shape}")
                 new_shape = layer.output_shape(shape)
@@ -352,6 +385,15 @@ class Sequential:
         """Flatten image samples to rows: (N, *input_shape) -> (N, features)."""
         return as_rows(data, self._input_shape, name)
 
+    def _output_shape(self) -> Optional[Tuple[int, ...]]:
+        """Shape of one output: (units,), or (channels, height, width) for an image."""
+        return self._layer_shapes()[-1][1] if self._layers and self._input_shape else None
+
+    def _targets_as_rows(self, data: ArrayLike, name: str = "y") -> ArrayLike:
+        """Flatten image targets (e.g. an autoencoder's) to rows, like inputs."""
+        shape = self._output_shape()
+        return as_rows(data, shape if shape and len(shape) == 3 else None, name)
+
     def _apply_training_settings(self) -> None:
         """Push the optional training settings from compile() to the C network."""
         if self._weight_decay is not None and self._weight_decay > 0:
@@ -368,6 +410,10 @@ class Sequential:
         # after the layers (and their Dense(dropout=...) overrides) are in place
         if self._dropout is not None:
             lib.ann_set_dropout(self._ptr, self._dropout)
+        if self._noise is not None:
+            noise_type, amount, low, high = self._noise
+            result = lib.ann_set_input_noise(self._ptr, getattr(lib, _NOISE_TYPES[noise_type]), amount, low, high)
+            raise_for_error_code(result, "Failed to set input noise")
     
     def fit(
         self,
@@ -404,7 +450,7 @@ class Sequential:
         
         # Convert data to tensors
         x_arr = self._as_rows(x)
-        y_arr = to_array(y)
+        y_arr = self._targets_as_rows(y)
         
         if has_numpy():
             import numpy as np
@@ -440,7 +486,8 @@ class Sequential:
         val_tensors = None
         if validation_data is not None:
             x_val, y_val = validation_data
-            val_tensors = (Tensor(self._as_rows(x_val, "validation x")), Tensor(to_array(y_val)))
+            val_tensors = (Tensor(self._as_rows(x_val, "validation x")),
+                           Tensor(self._targets_as_rows(y_val, "validation y")))
             raise_for_error_code(
                 lib.ann_set_validation_data(self._ptr, val_tensors[0]._ptr, val_tensors[1]._ptr),
                 "Invalid validation data",
@@ -513,7 +560,7 @@ class Sequential:
         # libann copies batch_size * units values from these buffers without
         # checking their size, so the shapes must be verified here
         x_keep, x_rows, x_ptr = _batch_buffer(self._as_rows(x), in_units, "x")
-        y_keep, y_rows, y_ptr = _batch_buffer(y, out_units, "y")
+        y_keep, y_rows, y_ptr = _batch_buffer(self._targets_as_rows(y), out_units, "y")
         if x_rows != y_rows:
             raise ValueError(f"x has {x_rows} samples but y has {y_rows}")
         
@@ -573,7 +620,10 @@ class Sequential:
             x: Input data
             
         Returns:
-            Predictions (numpy array if available, else list)
+            Predictions (numpy array if available, else nested lists):
+            (samples, outputs), or (samples, channels, height, width) when the
+            output layer produces an image (Conv2D, MaxPool2D, UpSample2D or
+            Reshape), e.g. an autoencoder's
         """
         if not self._built:
             raise NetworkError("Model must be trained before making predictions")
@@ -602,17 +652,17 @@ class Sequential:
                 n_samples,
             )
             raise_for_error_code(result, "Prediction failed")
-            return results
+            return as_images(results, self._output_shape())
         else:
             flat = [float(v) for row in x_arr for v in row]
             inputs = ffi.new("real[]", flat)
             outputs = ffi.new("real[]", n_samples * output_size)
             result = lib.ann_predict_batch(self._ptr, inputs, outputs, n_samples)
             raise_for_error_code(result, "Prediction failed")
-            return [
+            return as_images([
                 [outputs[i * output_size + j] for j in range(output_size)]
                 for i in range(n_samples)
-            ]
+            ], self._output_shape())
 
     def evaluate(self, x: ArrayLike, y: ArrayLike) -> float:
         """Evaluate model accuracy on test data.
@@ -628,7 +678,7 @@ class Sequential:
             raise NetworkError("Model must be trained before evaluation")
         
         x_tensor = Tensor(self._as_rows(x))
-        y_tensor = Tensor(to_array(y))
+        y_tensor = Tensor(self._targets_as_rows(y))
         
         accuracy = lib.ann_evaluate_accuracy(self._ptr, x_tensor._ptr, y_tensor._ptr)
         return accuracy
@@ -647,7 +697,7 @@ class Sequential:
             raise NetworkError("Model must be trained before evaluation")
         
         x_tensor = Tensor(self._as_rows(x))
-        y_tensor = Tensor(to_array(y))
+        y_tensor = Tensor(self._targets_as_rows(y))
         
         loss = lib.ann_evaluate_loss(self._ptr, x_tensor._ptr, y_tensor._ptr)
         if loss < 0.0:
@@ -726,6 +776,10 @@ class Sequential:
                 layers.append(MaxPool2D(settings[0], settings[1]))
             elif kind == lib.LAYER_KIND_FLATTEN:
                 layers.append(Flatten())
+            elif kind == lib.LAYER_KIND_UPSAMPLE2D:
+                layers.append(UpSample2D(settings[0]))
+            elif kind == lib.LAYER_KIND_RESHAPE:
+                layers.append(Reshape((channels, height, width)))
             else:
                 lib.ann_free_network(ptr)
                 raise NetworkError(f"{filepath} contains layer types pyann does not support yet")
@@ -800,7 +854,7 @@ class Sequential:
         if ptr == ffi.NULL:
             raise NetworkError("Quantization failed (softmax is supported only on the output layer)")
         output_size = lib.ann_get_layer_nodes(self._ptr, lib.ann_get_layer_count(self._ptr) - 1)
-        return QuantizedModel(ptr, self._input_shape, input_size, output_size)
+        return QuantizedModel(ptr, self._input_shape, input_size, output_size, self._output_shape())
 
     def export_c_header(self, filepath: Union[str, Path], prefix: Optional[str] = None,
                         runtime: bool = True) -> Path:
@@ -865,6 +919,85 @@ class Sequential:
         if self._built and self._ptr is not None:
             lib.ann_clear_history(self._ptr)
     
+    def set_input_noise(self, noise: Optional[str], amount: float = 0.0,
+                        clip: Optional[Tuple[float, float]] = None) -> "Sequential":
+        """Corrupt the inputs of every training batch, e.g. for a denoising autoencoder.
+        
+        The network trains on noisy inputs and learns to output the clean
+        targets: fit(x, x) with noise teaches it to remove that noise. Noise
+        is drawn fresh for every batch (in fit() and train_on_batch());
+        predict() and evaluate() use the inputs as given. It is not saved
+        with the model.
+        
+        Args:
+            noise: 'gaussian' (adds normal noise with standard deviation
+                ``amount``), 'masking' (sets inputs to 0 with probability
+                ``amount``), 'salt_pepper' (sets inputs to the clip range's low
+                or high value with probability ``amount``), or None to turn
+                noise off
+            amount: Standard deviation, or probability in [0, 1]
+            clip: (low, high) range to clamp noisy values to, e.g. (0, 1) for
+                pixels; required for 'salt_pepper'
+        
+        Returns:
+            self for method chaining
+        """
+        if noise is not None and noise not in _NOISE_TYPES:
+            raise ValueError(f"noise must be one of {sorted(_NOISE_TYPES)} or None, got {noise!r}")
+        if not amount >= 0.0 or (noise in ("masking", "salt_pepper") and amount > 1.0):
+            raise ValueError(f"amount must be >= 0 (and at most 1 for {noise}), got {amount}")
+        low, high = (0.0, 0.0) if clip is None else (float(clip[0]), float(clip[1]))
+        if not low <= high or (noise == "salt_pepper" and not low < high):
+            raise ValueError(f"clip must be (low, high) with low < high"
+                             f"{' (required for salt_pepper)' if noise == 'salt_pepper' else ''}, got {clip}")
+        self._noise = None if noise is None else (noise, float(amount), low, high)
+        if self._built:
+            if self._noise is None:
+                lib.ann_set_input_noise(self._ptr, lib.NOISE_NONE, 0.0, 0.0, 0.0)
+            else:
+                self._apply_training_settings()
+        return self
+
+    @property
+    def input_noise(self) -> Optional[Tuple[str, float, Optional[Tuple[float, float]]]]:
+        """The input noise as (noise, amount, clip), or None when it is off."""
+        if self._noise is None:
+            return None
+        noise, amount, low, high = self._noise
+        return (noise, amount, (low, high) if low < high else None)
+
+    def apply_input_noise(self, x: ArrayLike) -> ArrayLike:
+        """A copy of x with the input noise applied, as training applies it.
+        
+        Use it to make noisy test inputs for evaluating a denoising
+        autoencoder. Returns an unchanged copy when noise is off.
+        
+        Args:
+            x: Inputs of any shape
+        """
+        self._build()
+        if has_numpy():
+            import numpy as np
+            noisy = np.array(to_array(x), dtype=np.float32, order="C", copy=True)
+            if noisy.size:
+                result = lib.ann_apply_input_noise(self._ptr, ffi.cast("real *", noisy.ctypes.data), noisy.size)
+                raise_for_error_code(result, "Failed to apply input noise")
+            return noisy
+
+        def flatten(v):
+            return [w for item in v for w in flatten(item)] if isinstance(v, (list, tuple)) else [float(v)]
+
+        def rebuild(v, it):
+            return [rebuild(item, it) for item in v] if isinstance(v, (list, tuple)) else next(it)
+
+        data = to_array(x)
+        values = flatten(data)
+        buffer = ffi.new("real[]", values)
+        if values:
+            raise_for_error_code(lib.ann_apply_input_noise(self._ptr, buffer, len(values)),
+                                 "Failed to apply input noise")
+        return rebuild(data, iter(buffer))
+
     def set_weight_decay(self, lambda_: float) -> "Sequential":
         """Set L2 regularization (weight decay) coefficient.
         
@@ -921,7 +1054,7 @@ class Sequential:
         
         from pyann.core.tensor import Tensor
         x_tensor = Tensor(self._as_rows(x))
-        y_tensor = Tensor(to_array(y))
+        y_tensor = Tensor(self._targets_as_rows(y))
         
         tp = ffi.new("int *")
         fp = ffi.new("int *")
@@ -960,6 +1093,10 @@ class Sequential:
                         f"padding {layer.padding}, {_activation_name(layer)}) -> {shape}")
             elif isinstance(layer, MaxPool2D):
                 text = f"MaxPool2D({layer.pool_size}x{layer.pool_size}, stride {layer.strides}) -> {shape}"
+            elif isinstance(layer, UpSample2D):
+                text = f"UpSample2D({layer.size}x) -> {shape}"
+            elif isinstance(layer, Reshape):
+                text = f"Reshape -> {shape}"
             else:
                 text = f"Flatten -> {shape}"
             lines.append(f"{text} - {params:,} params" if params else text)
