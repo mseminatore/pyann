@@ -35,10 +35,24 @@ def fashion_csv(tmp_path_factory):
     return paths
 
 
+# Runs an example as __main__, but first arms a watchdog: if it is still
+# running after HANG_SECONDS, faulthandler prints every thread's stack to
+# stderr and exits, so a hang shows where it stuck instead of just timing out
+RUNNER = """
+import faulthandler, os, runpy, sys
+faulthandler.dump_traceback_later(float(sys.argv[1]), exit=True)
+sys.argv = sys.argv[2:]
+sys.path.insert(0, os.path.dirname(os.path.abspath(sys.argv[0])))   # as `python script.py` does
+runpy.run_path(sys.argv[0], run_name="__main__")
+"""
+HANG_SECONDS = 120
+
+
 def run_example(script, *args, cwd):
+    env = dict(os.environ, PYTHONUNBUFFERED="1")
     result = subprocess.run(
-        [sys.executable, str(EXAMPLES / script), *args],
-        cwd=cwd, capture_output=True, text=True, timeout=300,
+        [sys.executable, "-c", RUNNER, str(HANG_SECONDS), str(EXAMPLES / script), *args],
+        cwd=cwd, capture_output=True, text=True, timeout=HANG_SECONDS + 60, env=env,
     )
     assert result.returncode == 0, f"{script} failed:\n{result.stdout}\n{result.stderr}"
     return result.stdout

@@ -81,7 +81,7 @@ def main() -> int:
 
         if (step + 1) % window == 0:
             acc = hits / (window * args.batch_size)
-            print(f"{step + 2 - window:5d}-{step + 1:<5d} {math.degrees(angle):5.0f}°   "
+            print(f"{step + 2 - window:5d}-{step + 1:<5d} {math.degrees(angle):5.0f}    "
                   f"{acc[0]:7.1%}   {acc[1]:7.1%}   {np.mean(losses):11.4f}")
             hits[:] = 0
             losses.clear()

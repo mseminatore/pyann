@@ -161,7 +161,7 @@ def main():
         pred = predictions[idx]
         pred_class = pred.argmax()
         true_class = y_test_labels[idx]
-        correct = "✓" if pred_class == true_class else "✗"
+        correct = "ok" if pred_class == true_class else "XX"
         print(f"  {correct} Predicted: {CLASSES[pred_class]:15s} (conf: {pred[pred_class]:.1%}) | True: {CLASSES[true_class]}")
     
     return 0
