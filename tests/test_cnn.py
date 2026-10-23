@@ -174,6 +174,6 @@ class TestGpu:
         if not pyann.enable_gpu():
             pytest.skip("no GPU backend in this build")
         model, x, y = trained_cnn()
-        # Metal runs CNNs; CUDA is dense-only, so libann keeps them on the CPU
-        assert model._gpu_uploaded == (pyann.backend_info()["gpu_active"] == "metal")
+        # Metal and Vulkan run CNNs; CUDA is dense-only, so libann keeps them on the CPU
+        assert model._gpu_uploaded == (pyann.backend_info()["gpu_active"] in ("metal", "vulkan"))
         assert model.evaluate(x, y) == 1.0

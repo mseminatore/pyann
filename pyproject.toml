@@ -8,7 +8,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "pylibann"
-version = "0.8.0"
+version = "0.8.5"
 description = "Keras-like Python API for the libann neural network library (import as pyann)"
 keywords = ["neural network", "machine learning", "keras", "libann", "blas", "gpu"]
 readme = "README.md"
@@ -62,16 +62,21 @@ sdist.exclude = [
     "ann/testy",
     "ann/CLAUDE.md",
 ]
+# Prebuilt Vulkan shaders and headers (tools/prepare_vulkan.py), so installing
+# the sdist needs neither glslc nor the Vulkan SDK. Git ignores the directory.
+sdist.include = ["vulkan_prebuilt"]
 
 [[tool.scikit-build.overrides]]
 if.platform-system = "^darwin"
 cmake.define = { USE_ACCELERATE = "ON", USE_METAL = "ON", CMAKE_OSX_DEPLOYMENT_TARGET = "12.0" }
 
 [[tool.scikit-build.overrides]]
-# matched against sys.platform, which is "win32" on Windows
+# matched against sys.platform, which is "win32" on Windows. Vulkan is built
+# when the shaders can be (glslc or vulkan_prebuilt/), and falls back to
+# OpenBLAS at run time on machines without a Vulkan driver.
 if.platform-system = "^(linux|win32)"
 if.platform-machine = "^(x86_64|AMD64|aarch64)$"
-cmake.define = { USE_SCIPY_OPENBLAS = "ON" }
+cmake.define = { USE_SCIPY_OPENBLAS = "ON", USE_VULKAN = "AUTO" }
 
 [tool.cibuildwheel]
 # The wheel is tagged py3-none, so one interpreter per platform is enough
