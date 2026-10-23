@@ -201,8 +201,8 @@ class TestGpu:
         x = bars()
         model = autoencoder().set_input_noise("gaussian", 0.1, clip=(0, 1))
         model.fit(x, x, epochs=100, batch_size=8, verbose=0)
-        # Metal runs every layer kind; CUDA is dense-only, so libann keeps this on the CPU
-        assert model._gpu_uploaded == (pyann.backend_info()["gpu_active"] == "metal")
+        # Metal and Vulkan run every layer kind; CUDA is dense-only, so libann keeps this on the CPU
+        assert model._gpu_uploaded == (pyann.backend_info()["gpu_active"] in ("metal", "vulkan"))
         assert np.abs(model.predict(x) - x).mean() < 0.2
 
 

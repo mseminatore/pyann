@@ -256,7 +256,13 @@ def enable_gpu() -> bool:
     _load_library()
     if _backend_info["gpu_active"] is None and _backend_info["gpu"] is not None:
         if _lib.ann_gpu_init():
-            _backend_info["gpu_active"] = _backend_info["gpu"]
+            # A build with several backends starts the first that works (or
+            # the one ANN_GPU names); libann reports which one is running
+            build = ffi.new("Backend_info *")
+            if _lib.ann_get_backend_info(build) == 0:
+                _backend_info["gpu_active"] = ffi.string(build.gpu).decode().lower()
+            else:
+                _backend_info["gpu_active"] = _backend_info["gpu"]
     return _backend_info["gpu_active"] is not None
 
 

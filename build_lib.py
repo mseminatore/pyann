@@ -40,6 +40,7 @@ def build_library(
     use_scipy_openblas: bool = False,
     use_metal: bool = False,
     use_cuda: bool = False,
+    use_vulkan: bool = False,
 ):
     """Build the shared library."""
     cmake = find_cmake()
@@ -70,6 +71,8 @@ def build_library(
         cmake_args.append("-DUSE_METAL=ON")
     if use_cuda:
         cmake_args.append("-DUSE_CUDA=ON")
+    if use_vulkan:
+        cmake_args.append("-DUSE_VULKAN=ON")
     
     print(f"Configuring with: {' '.join(cmake_args)}")
     subprocess.run(cmake_args, cwd=build_dir, check=True)
@@ -102,6 +105,7 @@ def main():
     parser.add_argument("--scipy-openblas", action="store_true", help="Use OpenBLAS from the scipy-openblas32 package (pip install scipy-openblas32)")
     parser.add_argument("--metal", action="store_true", help="Enable Apple Metal GPU acceleration (macOS only)")
     parser.add_argument("--cuda", action="store_true", help="Enable NVIDIA CUDA GPU acceleration")
+    parser.add_argument("--vulkan", action="store_true", help="Enable Vulkan GPU acceleration (needs the Vulkan headers and glslc)")
     parser.add_argument("--clean", action="store_true", help="Clean build directory first")
     
     args = parser.parse_args()
@@ -124,6 +128,7 @@ def main():
         use_scipy_openblas=args.scipy_openblas,
         use_metal=args.metal,
         use_cuda=args.cuda,
+        use_vulkan=args.vulkan,
     )
 
 

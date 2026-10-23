@@ -30,7 +30,7 @@ class TestBackendInfo:
             assert key in info
 
     def test_gpu_backend_name(self):
-        assert pyann.backend_info()["gpu"] in (None, "metal", "cuda")
+        assert pyann.backend_info()["gpu"] in (None, "metal", "cuda", "vulkan")
 
 
 class TestEnableGpu:

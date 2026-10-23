@@ -20,6 +20,7 @@ option(USE_ACCELERATE "Use Apple Accelerate for BLAS (macOS only)" OFF)
 option(USE_SCIPY_OPENBLAS "Use the prebuilt OpenBLAS from the scipy-openblas32 Python package" OFF)
 option(USE_METAL "Use Apple Metal GPU acceleration (macOS only)" OFF)
 option(USE_CUDA "Use NVIDIA CUDA GPU acceleration" OFF)
+option(USE_VULKAN "Use Vulkan GPU acceleration (AMD, Intel, NVIDIA)" OFF)
 
 # Find the ann source (expects it as a submodule or sibling directory)
 set(ANN_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/ann" CACHE PATH "Path to ann source directory")
@@ -227,6 +228,51 @@ if(USE_CUDA)
     target_link_libraries(ann PRIVATE CUDA::cudart CUDA::cublas)
 endif()
 
+# Vulkan GPU support. Building needs the Vulkan headers and glslc; libann opens
+# the Vulkan loader at run time, so the library has no link dependency on it and
+# falls back to the CPU on machines without a Vulkan driver.
+if(USE_VULKAN)
+    find_package(Vulkan REQUIRED)
+    if(NOT Vulkan_GLSLC_EXECUTABLE)
+        message(FATAL_ERROR "USE_VULKAN needs glslc (install the Vulkan SDK, or the glslc package)")
+    endif()
+    target_compile_definitions(ann PRIVATE USE_VULKAN=1)
+    # Compile each shader to SPIR-V, then embed them all in shaders_vk_spv.h
+    # (the same steps as libann's own CMakeLists.txt)
+    set(VULKAN_SHADERS gemm bias_act softmax act_deriv softmax_jacobian output_delta_loss
+                       bias_grad_sum optimizer dropout
+                       conv_im2col conv_output conv_grad_rows conv_col2im
+                       maxpool_forward maxpool_backward upsample sum_partials
+                       conv_direct_forward conv_direct_input_grad conv_direct_weight_grad)
+    set(VULKAN_SPV_DIR ${CMAKE_CURRENT_BINARY_DIR}/vk_spv)
+    file(MAKE_DIRECTORY ${VULKAN_SPV_DIR})
+    set(VULKAN_SPV_FILES "")
+    foreach(shader ${VULKAN_SHADERS})
+        add_custom_command(
+            OUTPUT ${VULKAN_SPV_DIR}/${shader}.spv
+            COMMAND ${Vulkan_GLSLC_EXECUTABLE} --target-env=vulkan1.1 -O
+                    -I ${ANN_SOURCE_DIR}/shaders/vk
+                    -o ${VULKAN_SPV_DIR}/${shader}.spv ${ANN_SOURCE_DIR}/shaders/vk/${shader}.comp
+            DEPENDS ${ANN_SOURCE_DIR}/shaders/vk/${shader}.comp ${ANN_SOURCE_DIR}/shaders/vk/common.glsl
+            COMMENT "Compiling Vulkan shader ${shader}.comp"
+            VERBATIM)
+        list(APPEND VULKAN_SPV_FILES ${VULKAN_SPV_DIR}/${shader}.spv)
+    endforeach()
+    # comma-separated: a ';' list would end the command in a Unix shell
+    string(REPLACE ";" "," VULKAN_SHADER_NAMES "${VULKAN_SHADERS}")
+    add_custom_command(
+        OUTPUT ${VULKAN_SPV_DIR}/shaders_vk_spv.h
+        COMMAND ${CMAKE_COMMAND} -DSPV_DIR=${VULKAN_SPV_DIR} -DNAMES=${VULKAN_SHADER_NAMES}
+                -DOUT=${VULKAN_SPV_DIR}/shaders_vk_spv.h -P ${ANN_SOURCE_DIR}/cmake/embed_spirv.cmake
+        DEPENDS ${VULKAN_SPV_FILES} ${ANN_SOURCE_DIR}/cmake/embed_spirv.cmake
+        COMMENT "Embedding Vulkan shaders"
+        VERBATIM)
+    target_sources(ann PRIVATE ${ANN_SOURCE_DIR}/tensor_vulkan.c ${VULKAN_SPV_DIR}/shaders_vk_spv.h)
+    target_include_directories(ann PRIVATE ${Vulkan_INCLUDE_DIRS} ${VULKAN_SPV_DIR})
+    # dlopen() on Linux
+    target_link_libraries(ann PRIVATE ${CMAKE_DL_LIBS})
+endif()
+
 if(SKBUILD)
     # Building a wheel: install the library into the pyann package
     install(TARGETS ann
@@ -278,5 +324,6 @@ message(STATUS "  Accelerate: ${USE_ACCELERATE}")
 message(STATUS "  scipy-openblas32: ${USE_SCIPY_OPENBLAS}")
 message(STATUS "  Metal: ${USE_METAL}")
 message(STATUS "  CUDA: ${USE_CUDA}")
+message(STATUS "  Vulkan: ${USE_VULKAN}")
 message(STATUS "  Output: ${PYANN_LIB_DIR}")
 message(STATUS "")
