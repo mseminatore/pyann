@@ -225,8 +225,16 @@ jobs:
     permissions:
       id-token: write   # trusted publishing: no API token needed
     steps:
+      # Only the distributions: the run's other artifacts (vulkan-prebuilt)
+      # would land in dist/ and fail the upload's metadata check
       - uses: actions/download-artifact@v4
         with:
+          name: sdist
+          path: dist
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: wheel-*
           path: dist
           merge-multiple: true
 
