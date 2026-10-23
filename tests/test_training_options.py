@@ -238,6 +238,14 @@ class TestValidationAndEarlyStopping:
         assert history["val_loss"] == pytest.approx(model.evaluate_loss(x, y), rel=1e-5)
         assert 0.0 <= history["val_accuracy"] <= 1.0
 
+    def test_training_loss_in_history(self):
+        x, y = separable_data()
+        model = make_model()
+        model.compile(convergence=0.0)
+        history = model.fit(x, y, epochs=3, verbose=0)
+        assert history["loss"] > 0.0
+        assert history["loss"] == pytest.approx(model.evaluate_loss(x, y), rel=0.5)
+
     def test_zero_patience_is_rejected(self):
         x, y = separable_data()
         with pytest.raises(InvalidParameterError):

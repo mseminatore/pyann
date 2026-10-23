@@ -1,10 +1,37 @@
 """Hyperparameter space configuration."""
 
-from typing import List, Tuple, Optional, Union
+import math
+from typing import Any, Callable, List, Tuple, Optional, Union
 from dataclasses import dataclass, field
 
 from pyann.activations import Activation
 from pyann.optimizers import OptimizerType
+
+
+#: Topology patterns: "any" lets each layer pick its own width; the others
+#: derive every width from one base width, as libann's hypertuner does
+TOPOLOGIES = ("any", "constant", "pyramid", "inverse", "funnel")
+_TOPOLOGY_ALIASES = {"uniform": "constant", "diamond": "funnel"}
+_MIN_WIDTH = 8   # the narrowest layer a pattern makes (as in libann)
+
+
+def topology_sizes(topology: str, base: int, count: int) -> List[int]:
+    """Hidden layer widths for a topology pattern, like libann's hypertune_generate_topology().
+    
+    Args:
+        topology: "constant", "pyramid", "inverse" or "funnel"
+        base: The base width
+        count: Number of hidden layers
+    """
+    if topology == "pyramid":       # base, base/2, base/4, ...
+        return [max(_MIN_WIDTH, base >> i) for i in range(count)]
+    if topology == "inverse":       # ..., base/4, base/2, base
+        return [max(_MIN_WIDTH, base >> (count - 1 - i)) for i in range(count)]
+    if topology == "funnel":        # base, 2*base, ... (at most 4*base), then back down
+        mid = count // 2
+        return [min(base << i, base * 4) if i <= mid else max(_MIN_WIDTH, base << (count - 1 - i))
+                for i in range(count)]
+    return [base] * count
 
 
 @dataclass
@@ -22,6 +49,16 @@ class HyperparamSpace:
         layer_sizes: List of possible layer sizes
         activations: List of activation functions to try
         dropout_rates: List of dropout rates to try
+        topology: How the hidden layers' widths relate, or a list of
+            patterns to search over (see TOPOLOGIES): "any" (each layer
+            picks its own width from layer_sizes), or a pattern that grows
+            every width from one base width picked from layer_sizes:
+            "constant" (all the same), "pyramid" (halving toward the
+            output), "inverse" (doubling toward the output) or "funnel"
+            (widening, then narrowing). The patterns match libann's
+            hypertuner. "uniform" and "diamond" are accepted for "constant"
+            and "funnel".
+        epochs: Maximum epochs for each trial (fewer with early stopping)
         
     Example:
         >>> space = HyperparamSpace(
@@ -61,10 +98,10 @@ class HyperparamSpace:
         default_factory=lambda: [0.0, 0.2, 0.5]
     )
     
-    # Topology patterns
-    topology: str = "uniform"  # "uniform", "pyramid", "funnel", "diamond"
+    # Topology pattern(s): "any", "constant", "pyramid", "inverse", "funnel"
+    topology: Union[str, List[str]] = "any"
     
-    # Number of epochs for each trial
+    # Maximum epochs for each trial (fewer with early stopping)
     epochs: int = 50
     
     def validate(self) -> None:
@@ -88,6 +125,22 @@ class HyperparamSpace:
             raise ValueError("At least one layer size must be specified")
         if any(ls <= 0 for ls in self.layer_sizes):
             raise ValueError("Layer sizes must be positive")
+        
+        self.topologies()   # raises for unknown names
+    
+    def topologies(self) -> List[str]:
+        """The topology patterns to search, by their canonical names."""
+        names = [self.topology] if isinstance(self.topology, str) else list(self.topology)
+        if not names:
+            raise ValueError("At least one topology must be specified")
+        result = []
+        for name in names:
+            key = _TOPOLOGY_ALIASES.get(name, name)
+            if key not in TOPOLOGIES:
+                raise ValueError(f"Unknown topology {name!r}; valid: {', '.join(TOPOLOGIES)}")
+            if key not in result:
+                result.append(key)
+        return result
 
 
 @dataclass
@@ -102,9 +155,17 @@ class HypertuneResult:
         layer_sizes: List of layer sizes
         activations: List of activations per layer
         dropout_rate: Dropout rate used
-        accuracy: Validation accuracy achieved
-        loss: Final training loss
-        epochs: Number of epochs trained
+        accuracy: Validation accuracy of the trained model
+        loss: Training loss of the last epoch
+        epochs: Maximum epochs the trial could train (HyperparamSpace.epochs)
+        val_loss: Validation loss of the trained model
+        score: What the search ranks by, higher is better: the validation
+            accuracy, the negated validation loss, or a custom scorer's value
+            (see HypertuneOptions.scoring)
+        best_epoch: With early stopping, the epoch whose weights the model
+            kept; None without it
+        training_time: Seconds spent training the trial
+        topology: The topology pattern that made layer_sizes
     """
     learning_rate: float
     batch_size: int
@@ -116,6 +177,11 @@ class HypertuneResult:
     accuracy: float
     loss: float
     epochs: int
+    val_loss: float = math.nan
+    score: float = math.nan
+    best_epoch: Optional[int] = None
+    training_time: float = 0.0
+    topology: str = "any"
     
     def to_dict(self) -> dict:
         """Convert to dictionary."""
@@ -130,6 +196,11 @@ class HypertuneResult:
             "accuracy": self.accuracy,
             "loss": self.loss,
             "epochs": self.epochs,
+            "val_loss": self.val_loss,
+            "score": self.score,
+            "best_epoch": self.best_epoch,
+            "training_time": self.training_time,
+            "topology": self.topology,
         }
 
 
@@ -139,18 +210,26 @@ class HypertuneOptions:
     
     Attributes:
         verbose: Verbosity level (0=silent, 1=summary, 2=detailed)
-        seed: Random seed for reproducibility
-        early_stopping: Whether to use early stopping
+        seed: Seed for the search's own sampling of configurations (Python's
+            ``random``); libann's weight initialization is not affected
+        early_stopping: Stop each trial once its validation loss has not
+            improved for ``patience`` epochs, and keep its best epoch's weights
         patience: Early stopping patience (epochs)
-        scoring: Scoring metric ("accuracy" or "loss")
+        scoring: What trials are ranked by, higher is better: "accuracy"
+            (validation accuracy, for classification), "loss" (the negated
+            validation loss; use it for regression), or a function
+            ``score(model, x_val, y_val) -> float`` called with each trained
+            model
     """
     verbose: int = 1
     seed: Optional[int] = None
     early_stopping: bool = True
     patience: int = 10
-    scoring: str = "accuracy"
+    scoring: Union[str, Callable[[Any, Any, Any], float]] = "accuracy"
     
     def validate(self) -> None:
         """Validate options."""
-        if self.scoring not in ("accuracy", "loss"):
-            raise ValueError(f"scoring must be 'accuracy' or 'loss', got {self.scoring}")
+        if not callable(self.scoring) and self.scoring not in ("accuracy", "loss"):
+            raise ValueError(f"scoring must be 'accuracy', 'loss' or a function, got {self.scoring!r}")
+        if self.early_stopping and self.patience < 1:
+            raise ValueError(f"patience must be at least 1, got {self.patience}")

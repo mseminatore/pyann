@@ -449,9 +449,10 @@ class Sequential:
             lr_scheduler: Learning rate scheduler
             
         Returns:
-            Dictionary with training history: ``epochs``; with validation
-            data, ``val_loss`` and ``val_accuracy`` for the final weights;
-            with EarlyStopping, ``best_epoch``
+            Dictionary with training history: ``epochs`` and ``loss`` (the
+            last epoch's training loss); with validation data, ``val_loss``
+            and ``val_accuracy`` for the final weights; with EarlyStopping,
+            ``best_epoch``
         """
         self._build()
         self.end_online_training()
@@ -514,8 +515,8 @@ class Sequential:
             if loss == 0.0:
                 raise NetworkError("Training failed")
             
-            # Build history dict
-            history = {"epochs": epochs}
+            # Build history dict (loss: the last epoch's average training loss)
+            history = {"epochs": epochs, "loss": loss}
             if stopping is not None:
                 history["best_epoch"] = lib.ann_get_best_epoch(self._ptr)
             

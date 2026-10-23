@@ -12,7 +12,7 @@ Python wrapper for the [libann](https://github.com/mseminatore/ann) neural netwo
 - **Loss functions**: MSE, Categorical Cross-Entropy
 - **Online training**: `train_on_batch()` for streaming data, fine-tuning and custom training loops
 - **Learning rate schedulers**: Step decay, Exponential decay, Cosine annealing
-- **Hyperparameter tuning**: Grid search, Random search, Bayesian optimization, TPE (pure-Python searches built on `Sequential`; libann's native hypertuner is not exposed)
+- **Hyperparameter tuning**: Grid search, Random search, Gaussian-process Bayesian optimization, TPE, with early stopping, custom scoring and network-shape search (pure-Python searches built on `Sequential`; libann's native hypertuner is not exposed)
 - **NumPy optional**: Works with Python lists, optimized for NumPy arrays
 - **Model persistence**: Save/load in text or binary format, ONNX export/import (including CNNs and PyTorch-style ONNX JSON)
 - **Deploy to microcontrollers**: Quantize a trained model to int8 and export it as a standalone C header (integer-only inference, no `malloc`), or export float32 weights
@@ -303,6 +303,69 @@ best, results = search.run(
 )
 ```
 
+### Scoring and Early Stopping in Searches
+
+Every search ranks its trials by `result.score`, where higher is better.
+`HypertuneOptions.scoring` chooses what that is:
+
+- `"accuracy"` (the default) is the validation accuracy, for classification.
+- `"loss"` is the negated validation loss. Use it for regression.
+- A function `score(model, x_val, y_val) -> float` is called with each trained model.
+
+```python
+from pyann import Activation, Loss
+from pyann.hypertune import HypertuneOptions, RandomSearch
+
+# Regression: rank by validation MSE, stop each trial after 5 epochs without improvement
+options = HypertuneOptions(scoring="loss", early_stopping=True, patience=5)
+search = RandomSearch(space, n_trials=30, options=options)
+best, results = search.run(X_train, y_train, X_val, y_val, input_size=8, output_size=1,
+                           output_activation=Activation.LINEAR, loss=Loss.MSE)
+print(best.val_loss, best.best_epoch, best.training_time)
+```
+
+Early stopping is on by default (`patience=10`). Each trial trains for up to
+`HyperparamSpace.epochs` epochs, stops once its validation loss stops improving,
+and keeps its best epoch's weights. Each result records:
+
+- `accuracy` and `val_loss`: measured on the validation data
+- `loss`: the last epoch's training loss
+- `score`: the value the search ranked by
+- `best_epoch`: the epoch whose weights were kept
+- `training_time`: in seconds
+
+`seed` makes the sampled configurations repeatable. It doesn't seed libann's
+weight initialization.
+
+### Network Shapes in Searches
+
+`HyperparamSpace.topology` sets how the hidden layers' widths relate. It takes
+one pattern or a list of patterns to search over:
+
+| Topology | Widths for base 128, 3 layers |
+|---|---|
+| `"any"` (default) | each layer picks its own width from `layer_sizes` |
+| `"constant"` | 128, 128, 128 |
+| `"pyramid"` | 128, 64, 32 |
+| `"inverse"` | 32, 64, 128 |
+| `"funnel"` | 128, 256, 128 |
+
+The patterns pick one base width from `layer_sizes` and build every layer's
+width from it, as libann's hypertuner does: no layer is narrower than 8, and
+`"funnel"` widens to at most 4x the base. `"uniform"` and `"diamond"` are
+accepted as names for `"constant"` and `"funnel"`. TPE learns which topologies
+and widths score well, not just learning rates and batch sizes. `GridSearch`
+tries every base width for a pattern, and every combination of widths for
+`"any"` (`len(layer_sizes) ** layers` of them).
+
+```python
+space = HyperparamSpace(topology=["constant", "pyramid"], hidden_layers=(2, 4),
+                        layer_sizes=[64, 128, 256])
+best, _ = TPESearch(space, n_trials=40).run(X_train, y_train, X_val, y_val,
+                                           input_size=784, output_size=10)
+print(best.topology, best.layer_sizes)   # e.g. pyramid [256, 128, 64]
+```
+
 ### Save and Load
 
 ```python
@@ -516,11 +579,27 @@ EarlyStopping(patience=10, min_delta=0.0001, restore_best=True)  # Stop when (va
 ```python
 GridSearch(space, lr_steps=3)                          # Exhaustive grid search
 RandomSearch(space, n_trials=50)                       # Random sampling
-BayesianSearch(space, n_trials=50, n_initial=10)       # Bayesian optimization
+BayesianSearch(space, n_trials=50, n_initial=10,       # Gaussian-process Bayesian optimization
+               n_candidates=100, exploration=0.01)
 TPESearch(space, n_trials=50, n_startup=10, gamma=0.25)  # Tree-structured Parzen Estimator
 ```
 
 All accept a `HyperparamSpace` and return `(best_result, all_results)` from `run()`.
+
+`BayesianSearch` uses the same model as libann's hypertuner:
+
+- **The model:** a Gaussian process over every setting. Learning rate, batch
+  size, dropout, depth and each layer's width are continuous; optimizer,
+  topology and each layer's activation are categorical. Each setting has its
+  own length scale, refit every trial, so settings that don't matter stop
+  steering the search.
+- **Choosing the next trial:** after `n_initial` random trials, it picks the
+  candidate with the highest Expected Improvement. Half of the candidates are
+  random and half are small changes to the best trial.
+- **Cost:** it takes longer than TPE to choose each trial, about a second over
+  30 trials in pure Python. That's small next to training. On a 20-trial
+  Fashion-MNIST search it found configurations about as good as TPE's and
+  random search's, so try both on your problem.
 
 ### Errors
 
@@ -536,7 +615,7 @@ logging.getLogger("pyann").setLevel(logging.DEBUG)
 
 pyann covers libann's training, inference, persistence, regularization and GPU features. These parts of libann's C API have no Python equivalent yet:
 
-- **libann's native hypertuner** (`ann_hypertune.h`). `pyann.hypertune` is a separate Python implementation, so its search spaces and results differ from the C one (for example topology names, per-layer activation search, and the Gaussian-process settings).
+- **libann's native hypertuner** (`ann_hypertune.h`). `pyann.hypertune` is a separate Python implementation, so its search spaces and results differ from the C one. Its topology patterns produce the same widths as libann's, and `BayesianSearch` uses the same kind of Gaussian process.
 - **Error-log callbacks**: pyann installs its own, so libann errors surface in the Python exception instead of on stderr (see [Errors](#errors)).
 - **Tensor math** (gemm, elementwise ops and so on): use NumPy.
 
