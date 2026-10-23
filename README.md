@@ -303,6 +303,40 @@ best, results = search.run(
 )
 ```
 
+### Scoring and Early Stopping in Searches
+
+Every search ranks its trials by `result.score`, where higher is better.
+`HypertuneOptions.scoring` chooses what that is:
+
+- `"accuracy"` (the default) is the validation accuracy, for classification.
+- `"loss"` is the negated validation loss. Use it for regression.
+- A function `score(model, x_val, y_val) -> float` is called with each trained model.
+
+```python
+from pyann import Activation, Loss
+from pyann.hypertune import HypertuneOptions, RandomSearch
+
+# Regression: rank by validation MSE, stop each trial after 5 epochs without improvement
+options = HypertuneOptions(scoring="loss", early_stopping=True, patience=5)
+search = RandomSearch(space, n_trials=30, options=options)
+best, results = search.run(X_train, y_train, X_val, y_val, input_size=8, output_size=1,
+                           output_activation=Activation.LINEAR, loss=Loss.MSE)
+print(best.val_loss, best.best_epoch, best.training_time)
+```
+
+Early stopping is on by default (`patience=10`). Each trial trains for up to
+`HyperparamSpace.epochs` epochs, stops once its validation loss stops improving,
+and keeps its best epoch's weights. Each result records:
+
+- `accuracy` and `val_loss`: measured on the validation data
+- `loss`: the last epoch's training loss
+- `score`: the value the search ranked by
+- `best_epoch`: the epoch whose weights were kept
+- `training_time`: in seconds
+
+`seed` makes the sampled configurations repeatable. It doesn't seed libann's
+weight initialization.
+
 ### Save and Load
 
 ```python

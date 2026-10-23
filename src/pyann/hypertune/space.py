@@ -1,6 +1,7 @@
 """Hyperparameter space configuration."""
 
-from typing import List, Tuple, Optional, Union
+import math
+from typing import Any, Callable, List, Tuple, Optional, Union
 from dataclasses import dataclass, field
 
 from pyann.activations import Activation
@@ -64,7 +65,7 @@ class HyperparamSpace:
     # Topology patterns
     topology: str = "uniform"  # "uniform", "pyramid", "funnel", "diamond"
     
-    # Number of epochs for each trial
+    # Maximum epochs for each trial (fewer with early stopping)
     epochs: int = 50
     
     def validate(self) -> None:
@@ -102,9 +103,16 @@ class HypertuneResult:
         layer_sizes: List of layer sizes
         activations: List of activations per layer
         dropout_rate: Dropout rate used
-        accuracy: Validation accuracy achieved
-        loss: Final training loss
-        epochs: Number of epochs trained
+        accuracy: Validation accuracy of the trained model
+        loss: Training loss of the last epoch
+        epochs: Maximum epochs the trial could train (HyperparamSpace.epochs)
+        val_loss: Validation loss of the trained model
+        score: What the search ranks by, higher is better: the validation
+            accuracy, the negated validation loss, or a custom scorer's value
+            (see HypertuneOptions.scoring)
+        best_epoch: With early stopping, the epoch whose weights the model
+            kept; None without it
+        training_time: Seconds spent training the trial
     """
     learning_rate: float
     batch_size: int
@@ -116,6 +124,10 @@ class HypertuneResult:
     accuracy: float
     loss: float
     epochs: int
+    val_loss: float = math.nan
+    score: float = math.nan
+    best_epoch: Optional[int] = None
+    training_time: float = 0.0
     
     def to_dict(self) -> dict:
         """Convert to dictionary."""
@@ -130,6 +142,10 @@ class HypertuneResult:
             "accuracy": self.accuracy,
             "loss": self.loss,
             "epochs": self.epochs,
+            "val_loss": self.val_loss,
+            "score": self.score,
+            "best_epoch": self.best_epoch,
+            "training_time": self.training_time,
         }
 
 
@@ -139,18 +155,26 @@ class HypertuneOptions:
     
     Attributes:
         verbose: Verbosity level (0=silent, 1=summary, 2=detailed)
-        seed: Random seed for reproducibility
-        early_stopping: Whether to use early stopping
+        seed: Seed for the search's own sampling of configurations (Python's
+            ``random``); libann's weight initialization is not affected
+        early_stopping: Stop each trial once its validation loss has not
+            improved for ``patience`` epochs, and keep its best epoch's weights
         patience: Early stopping patience (epochs)
-        scoring: Scoring metric ("accuracy" or "loss")
+        scoring: What trials are ranked by, higher is better: "accuracy"
+            (validation accuracy, for classification), "loss" (the negated
+            validation loss; use it for regression), or a function
+            ``score(model, x_val, y_val) -> float`` called with each trained
+            model
     """
     verbose: int = 1
     seed: Optional[int] = None
     early_stopping: bool = True
     patience: int = 10
-    scoring: str = "accuracy"
+    scoring: Union[str, Callable[[Any, Any, Any], float]] = "accuracy"
     
     def validate(self) -> None:
         """Validate options."""
-        if self.scoring not in ("accuracy", "loss"):
-            raise ValueError(f"scoring must be 'accuracy' or 'loss', got {self.scoring}")
+        if not callable(self.scoring) and self.scoring not in ("accuracy", "loss"):
+            raise ValueError(f"scoring must be 'accuracy', 'loss' or a function, got {self.scoring!r}")
+        if self.early_stopping and self.patience < 1:
+            raise ValueError(f"patience must be at least 1, got {self.patience}")

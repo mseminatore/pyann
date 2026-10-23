@@ -2,10 +2,12 @@
 
 import math
 import random
+import time
 from typing import List, Tuple, Optional, Callable, TYPE_CHECKING
 from dataclasses import dataclass
 
 from pyann.hypertune.space import HyperparamSpace, HypertuneResult, HypertuneOptions
+from pyann.callbacks import EarlyStopping
 from pyann.core.network import Sequential
 from pyann.core.layers import Dense
 from pyann.activations import Activation
@@ -15,6 +17,11 @@ from pyann.utils.compat import ArrayLike, to_array, has_numpy
 
 if TYPE_CHECKING:
     import numpy as np
+
+
+def _rank(score: float) -> float:
+    """A score for comparisons: NaN (e.g. a trial whose training diverged) ranks last."""
+    return -math.inf if math.isnan(score) else score
 
 
 class BaseSearch:
@@ -106,17 +113,32 @@ class BaseSearch:
             loss=loss
         )
         
-        # Train
+        # Train for up to space.epochs: early stopping, not libann's
+        # convergence threshold, decides when a trial is done
+        model.compile(convergence=0.0)
+        callbacks = []
+        if self.options.early_stopping:
+            callbacks.append(EarlyStopping(patience=self.options.patience, restore_best=True))
+        start = time.perf_counter()
         history = model.fit(
             X_train, y_train,
             epochs=self.space.epochs,
             batch_size=config["batch_size"],
             validation_data=(X_val, y_val),
-            verbose=0
+            verbose=0,
+            callbacks=callbacks
         )
+        training_time = time.perf_counter() - start
         
-        # Evaluate
-        accuracy = model.evaluate(X_val, y_val)
+        # Evaluate (the best epoch's weights with early stopping)
+        accuracy = history["val_accuracy"]
+        val_loss = history["val_loss"]
+        if callable(self.options.scoring):
+            score = float(self.options.scoring(model, X_val, y_val))
+        elif self.options.scoring == "loss":
+            score = -val_loss
+        else:
+            score = accuracy
         
         result = HypertuneResult(
             learning_rate=config["learning_rate"],
@@ -127,8 +149,12 @@ class BaseSearch:
             activations=config["activations"],
             dropout_rate=config["dropout_rate"],
             accuracy=accuracy,
-            loss=history.get("loss", 0.0),
-            epochs=self.space.epochs
+            loss=history["loss"],
+            epochs=self.space.epochs,
+            val_loss=val_loss,
+            score=score,
+            best_epoch=history.get("best_epoch"),
+            training_time=training_time
         )
         
         return result
@@ -137,14 +163,17 @@ class BaseSearch:
         """Update best result if this one is better."""
         self.results.append(result)
         
-        if self.best_result is None:
+        best = self.best_result
+        if best is None or _rank(result.score) > _rank(best.score):
             self.best_result = result
-        elif self.options.scoring == "accuracy":
-            if result.accuracy > self.best_result.accuracy:
-                self.best_result = result
-        else:  # loss
-            if result.loss < self.best_result.loss:
-                self.best_result = result
+    
+    def _describe_score(self, result: HypertuneResult) -> str:
+        """The trial's score in words, for progress output."""
+        if callable(self.options.scoring):
+            return f"Score: {result.score:.4f}"
+        if self.options.scoring == "loss":
+            return f"Validation loss: {result.val_loss:.4f}"
+        return f"Accuracy: {result.accuracy:.4f}"
     
     def create_model(
         self,
@@ -272,10 +301,10 @@ class RandomSearch(BaseSearch):
             self._update_best(result)
             
             if self.options.verbose >= 2:
-                print(f"  Accuracy: {result.accuracy:.4f}")
+                print(f"  {self._describe_score(result)}")
         
         if self.options.verbose >= 1:
-            print(f"\nBest accuracy: {self.best_result.accuracy:.4f}")
+            print(f"\nBest: {self._describe_score(self.best_result)}")
         
         return self.best_result, self.results
 
@@ -364,7 +393,7 @@ class GridSearch(BaseSearch):
             self._update_best(result)
         
         if self.options.verbose >= 1:
-            print(f"\nBest accuracy: {self.best_result.accuracy:.4f}")
+            print(f"\nBest: {self._describe_score(self.best_result)}")
         
         return self.best_result, self.results
 
@@ -477,14 +506,14 @@ class BayesianSearch(BaseSearch):
                 input_size, output_size, output_activation, loss
             )
             
-            self._history.append((config, result.accuracy))
+            self._history.append((config, _rank(result.score)))
             self._update_best(result)
             
             if self.options.verbose >= 2:
-                print(f"  Accuracy: {result.accuracy:.4f}")
+                print(f"  {self._describe_score(result)}")
         
         if self.options.verbose >= 1:
-            print(f"\nBest accuracy: {self.best_result.accuracy:.4f}")
+            print(f"\nBest: {self._describe_score(self.best_result)}")
         
         return self.best_result, self.results
 
@@ -758,15 +787,13 @@ class TPESearch(BaseSearch):
                 input_size, output_size, output_activation, loss
             )
             
-            score = (result.accuracy if self.options.scoring == "accuracy"
-                     else -result.loss)
-            self._observations.append((indices, score))
+            self._observations.append((indices, _rank(result.score)))
             self._update_best(result)
             
             if self.options.verbose >= 2:
-                print(f"  Accuracy: {result.accuracy:.4f}")
+                print(f"  {self._describe_score(result)}")
         
         if self.options.verbose >= 1:
-            print(f"\nBest accuracy: {self.best_result.accuracy:.4f}")
+            print(f"\nBest: {self._describe_score(self.best_result)}")
         
         return self.best_result, self.results
