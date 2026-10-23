@@ -7,6 +7,8 @@ import time
 from typing import List, Tuple, Optional, Callable, TYPE_CHECKING
 from dataclasses import dataclass
 
+from pyann.hypertune import gp
+from pyann.hypertune.gp import GaussianProcess
 from pyann.hypertune.space import HyperparamSpace, HypertuneResult, HypertuneOptions, topology_sizes
 from pyann.callbacks import EarlyStopping
 from pyann.core.network import Sequential
@@ -439,19 +441,30 @@ class GridSearch(BaseSearch):
 
 
 class BayesianSearch(BaseSearch):
-    """Bayesian optimization for hyperparameter search.
+    """Bayesian optimization with a Gaussian process, as in libann's hypertuner.
     
-    Uses a simple surrogate model to guide the search toward
-    promising regions of the hyperparameter space.
+    After ``n_initial`` random trials, a Gaussian process models the score
+    as a function of the configuration, and each next trial is the candidate
+    with the highest Expected Improvement over the best predicted score so
+    far. Learning rate, batch size, dropout, layer count and each layer's
+    width are continuous dimensions; optimizer, topology and each layer's
+    activation are categorical. Each dimension has its own length scale,
+    refit every iteration by maximizing the marginal likelihood, so settings
+    that don't affect the score stop steering the search. Half of the
+    candidates are random and half are small changes to the best trial.
     
-    Note: This is a simplified implementation. For production use,
-    consider using dedicated libraries like Optuna or scikit-optimize.
+    It spends more time choosing each trial than TPE, so it suits small
+    budgets of expensive trials. Pure Python: it doesn't need NumPy.
     
     Args:
         space: Hyperparameter search space
         n_trials: Number of trials
-        n_initial: Number of random trials before using surrogate
+        n_initial: Number of random trials before using the model
         options: Search options
+        n_candidates: Candidates scored by Expected Improvement per trial
+        exploration: Improvement a candidate must offer, in standard
+            deviations of the scores; larger values explore more
+        fit_hyperparams: Refit the length scales and noise every trial
     """
     
     def __init__(
@@ -459,22 +472,31 @@ class BayesianSearch(BaseSearch):
         space: HyperparamSpace,
         n_trials: int = 50,
         n_initial: int = 10,
-        options: Optional[HypertuneOptions] = None
+        options: Optional[HypertuneOptions] = None,
+        n_candidates: int = 100,
+        exploration: float = 0.01,
+        fit_hyperparams: bool = True
     ):
         super().__init__(space, options)
+        if n_initial < 1:
+            raise ValueError(f"n_initial must be at least 1, got {n_initial}")
+        if n_candidates < 1:
+            raise ValueError(f"n_candidates must be at least 1, got {n_candidates}")
         self.n_trials = n_trials
         self.n_initial = n_initial
+        self.n_candidates = n_candidates
+        self.exploration = exploration
+        self.fit_hyperparams = fit_hyperparams
         self._history: List[Tuple[dict, float]] = []
-    
-    def _sample_config(self, exploit: bool = False) -> dict:
-        """Sample configuration, optionally exploiting history."""
-        if not exploit or len(self._history) < self.n_initial:
-            # Random sampling
-            return self._random_config()
         
-        # Simple exploitation: perturb best config
-        best_config, _ = max(self._history, key=lambda x: x[1])
-        return self._perturb_config(best_config)
+        max_layers = self.space.hidden_layers[1]
+        self._gp = GaussianProcess(
+            [gp.CONTINUOUS, gp.CONTINUOUS, gp.CATEGORICAL, gp.CONTINUOUS, gp.CONTINUOUS, gp.CATEGORICAL]
+            + [gp.CONTINUOUS] * max_layers      # each layer's width
+            + [gp.CATEGORICAL] * max_layers     # each layer's activation
+        )
+        sizes = self.space.layer_sizes
+        self._width_range = (math.log2(min(8, min(sizes))), math.log2(4 * max(sizes)))
     
     def _random_config(self) -> dict:
         """Generate a random configuration."""
@@ -493,35 +515,92 @@ class BayesianSearch(BaseSearch):
         }
     
     def _perturb_config(self, config: dict) -> dict:
-        """Perturb a configuration slightly."""
+        """A small change to a configuration: each setting changes with some probability."""
         new_config = config.copy()
-        new_config["activations"] = config["activations"].copy()
+        activations = list(config["activations"])
         
-        # Perturb learning rate
-        lr = config["learning_rate"]
+        # Learning rate: scaled by up to 2x either way
         lr_min, lr_max = self.space.learning_rate
-        factor = random.uniform(0.5, 2.0)
-        new_lr = max(lr_min, min(lr_max, lr * factor))
-        new_config["learning_rate"] = new_lr
+        new_config["learning_rate"] = max(lr_min, min(lr_max, config["learning_rate"] * random.uniform(0.5, 2.0)))
         
-        # Possibly change batch size
         if random.random() < 0.3:
             new_config["batch_size"] = random.choice(self.space.batch_sizes)
+        if random.random() < 0.2:
+            new_config["optimizer"] = random.choice(self.space.optimizers)
+        if random.random() < 0.2:
+            new_config["dropout_rate"] = random.choice(self.space.dropout_rates)
         
-        # Possibly change the topology, then possibly one width (a layer's
-        # for "any", the base width for a pattern)
         topo_idx = self._topologies.index(config["topology"])
         n_hidden = len(config["layer_sizes"])
         width_idx = list(config["width_idx"])
+        
+        # One layer more or fewer
+        low, high = self.space.hidden_layers
+        if high > low and random.random() < 0.2:
+            n_hidden = min(high, max(low, n_hidden + random.choice((-1, 1))))
+            if self._topologies[topo_idx] == "any":
+                width_idx = (width_idx + [random.randrange(len(self.space.layer_sizes))])[:n_hidden]
+            activations = (activations + [random.choice(self.space.activations)])[:n_hidden]
+        
+        # Possibly change the topology, then possibly one width (a layer's
+        # for "any", the base width for a pattern)
         if len(self._topologies) > 1 and random.random() < 0.2:
             topo_idx = random.randrange(len(self._topologies))
             n_widths = n_hidden if self._topologies[topo_idx] == "any" else 1
             width_idx = [width_idx[0]] * n_widths
         if random.random() < 0.3:
             width_idx[random.randrange(len(width_idx))] = random.randrange(len(self.space.layer_sizes))
-        new_config.update(self._structure_config(topo_idx, n_hidden, width_idx))
+        if random.random() < 0.2:
+            activations[random.randrange(n_hidden)] = random.choice(self.space.activations)
         
+        new_config["activations"] = activations
+        new_config.update(self._structure_config(topo_idx, n_hidden, width_idx))
         return new_config
+    
+    def _encode(self, config: dict) -> List[float]:
+        """A configuration as a point for the Gaussian process."""
+        space = self.space
+        lr_min, lr_max = space.learning_rate
+        lo, hi = self._width_range
+        max_layers = space.hidden_layers[1]
+        sizes = config["layer_sizes"]
+        widths = [(math.log2(w) - lo) / (hi - lo) for w in sizes]
+        activations = [space.activations.index(a) for a in config["activations"]]
+        missing = max_layers - len(sizes)
+        return (
+            [(math.log(config["learning_rate"]) - math.log(lr_min)) / (math.log(lr_max) - math.log(lr_min)),
+             _position(config["batch_size"], space.batch_sizes),
+             space.optimizers.index(config["optimizer"]),
+             _position(config["dropout_rate"], space.dropout_rates),
+             _position(len(sizes), list(range(space.hidden_layers[0], max_layers + 1))),
+             self._topologies.index(config["topology"])]
+            + widths + [-0.5] * missing           # absent layers sit apart from every real width
+            + activations + [-1] * missing
+        )
+    
+    def _propose(self) -> Tuple[dict, float]:
+        """The candidate with the highest Expected Improvement, and that improvement."""
+        # Trials that failed (NaN score) count as the worst score seen
+        scores = [score for _, score in self._history]
+        worst = min((s for s in scores if math.isfinite(s)), default=0.0)
+        self._gp.set_scores([s if math.isfinite(s) else worst for s in scores])
+        if self.fit_hyperparams:
+            self._gp.tune()
+        
+        # Measure improvement from the best predicted score of the trials so
+        # far, so one lucky (noisy) trial doesn't set the bar
+        incumbent = max(self._gp.predict(x)[0] for x in self._gp.X)
+        xi = self.exploration * self._gp.score_scale
+        best_config = max(self._history, key=lambda item: item[1])[0]
+        
+        best_ei, best_candidate = -math.inf, None
+        for c in range(self.n_candidates):
+            candidate = self._perturb_config(best_config) if c % 2 else self._random_config()
+            mean, variance = self._gp.predict(self._encode(candidate))
+            ei = gp.expected_improvement(mean, variance, incumbent, xi)
+            if ei > best_ei:
+                best_ei, best_candidate = ei, candidate
+        return best_candidate, best_ei
     
     def run(
         self,
@@ -541,19 +620,23 @@ class BayesianSearch(BaseSearch):
         y_val = to_array(y_val)
         
         for trial in range(self.n_trials):
-            if self.options.verbose >= 1:
-                print(f"Trial {trial + 1}/{self.n_trials}")
+            if trial < self.n_initial or not any(math.isfinite(s) for _, s in self._history):
+                config, phase = self._random_config(), "random"
+            else:
+                config, ei = self._propose()
+                phase = f"GP, EI={ei:.4f}"
             
-            # Alternate between exploration and exploitation
-            exploit = trial >= self.n_initial and random.random() < 0.7
-            config = self._sample_config(exploit=exploit)
+            if self.options.verbose >= 1:
+                print(f"Trial {trial + 1}/{self.n_trials} ({phase})")
             
             result = self._evaluate_config(
                 config, X_train, y_train, X_val, y_val,
                 input_size, output_size, output_activation, loss
             )
             
-            self._history.append((config, _rank(result.score)))
+            score = _rank(result.score)
+            self._history.append((config, score))
+            self._gp.add(self._encode(config), score if math.isfinite(score) else 0.0)
             self._update_best(result)
             
             if self.options.verbose >= 2:
@@ -563,6 +646,12 @@ class BayesianSearch(BaseSearch):
             print(f"\nBest: {self._describe_score(self.best_result)}")
         
         return self.best_result, self.results
+
+
+def _position(value, values: List) -> float:
+    """Where value falls among the sorted distinct values, from 0 to 1."""
+    ordered = sorted(set(values))
+    return ordered.index(value) / (len(ordered) - 1) if len(ordered) > 1 else 0.5
 
 
 def _scott_bandwidth(samples: List[float], factor: float = 1.0) -> float:
