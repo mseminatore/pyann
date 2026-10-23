@@ -9,62 +9,21 @@ Usage:
     python mnist_fashion.py [train_file] [test_file]
 
 Dataset:
-    Download Fashion-MNIST CSV files from:
-    https://www.kaggle.com/datasets/tk230147/fashion-mnist
-    
-    Expected files:
-    - fashion-mnist_train.csv (60,000 training images)
-    - fashion-mnist_test.csv (10,000 test images)
+    Fashion-MNIST is downloaded into examples/data/ on first use. The Kaggle
+    CSV files (https://www.kaggle.com/datasets/tk230147/fashion-mnist) work
+    too: pass them as train_file and test_file.
 """
 
 import argparse
 import sys
 import time
-from pathlib import Path
 
 import numpy as np
 
 from pyann import Sequential, Dense, Adam, Loss, Activation, backend_info
 import pyann
 from pyann.callbacks import ExponentialDecay
-
-
-# Fashion-MNIST class labels
-CLASSES = [
-    "T-shirt/top",
-    "Trouser", 
-    "Pullover",
-    "Dress",
-    "Coat",
-    "Sandal",
-    "Shirt",
-    "Sneaker",
-    "Bag",
-    "Ankle boot"
-]
-
-
-def load_mnist_csv(filepath: str, has_header: bool = True) -> tuple:
-    """Load MNIST data from CSV file.
-    
-    CSV format: label, pixel_0, pixel_1, ..., pixel_783
-    
-    Returns:
-        Tuple of (X, y) where X is (n_samples, 784) and y is (n_samples,)
-    """
-    print(f"Loading {filepath}...", end="", flush=True)
-    
-    data = np.loadtxt(filepath, delimiter=",", skiprows=1 if has_header else 0, dtype=np.float32)
-    
-    # First column is label, rest are pixels
-    y = data[:, 0].astype(np.int32)
-    X = data[:, 1:]
-    
-    # Normalize pixel values to [0, 1]
-    X = X / 255.0
-    
-    print(f"done. ({len(X)} samples)")
-    return X, y
+from example_data import CLASSES, load_fashion_mnist
 
 
 def one_hot_encode(labels: np.ndarray, num_classes: int = 10) -> np.ndarray:
@@ -107,10 +66,8 @@ def class_histogram(predictions: np.ndarray):
 
 def main():
     parser = argparse.ArgumentParser(description="Train on Fashion-MNIST dataset")
-    parser.add_argument("train_file", nargs="?", default="fashion-mnist_train.csv",
-                        help="Training data CSV file")
-    parser.add_argument("test_file", nargs="?", default="fashion-mnist_test.csv",
-                        help="Test data CSV file")
+    parser.add_argument("train_file", nargs="?", help="Training data CSV file (default: download)")
+    parser.add_argument("test_file", nargs="?", help="Test data CSV file (default: download)")
     parser.add_argument("-e", "--epochs", type=int, default=5,
                         help="Number of training epochs (default: 5)")
     parser.add_argument("-b", "--batch-size", type=int, default=32,
@@ -127,7 +84,7 @@ def main():
     
     if args.use_gpu:
         if pyann.enable_gpu():          # True when a GPU backend is compiled in and a device is available
-            print("Using", pyann.backend_info()["gpu_active"])   # 'metal' or 'cuda'
+            print("Using", pyann.backend_info()["gpu_active"])   # 'metal', 'vulkan' or 'cuda'
 
 
     # Print backend configuration
@@ -140,20 +97,9 @@ def main():
 
     print(f"Backend: {config}")
 
-    # Check if data files exist
-    if not Path(args.train_file).exists():
-        print(f"Error: Training file not found: {args.train_file}")
-        print("\nDownload Fashion-MNIST from:")
-        print("https://www.kaggle.com/datasets/tk230147/fashion-mnist")
-        return 1
-    
-    if not Path(args.test_file).exists():
-        print(f"Error: Test file not found: {args.test_file}")
-        return 1
-    
     # Load data
-    X_train, y_train_labels = load_mnist_csv(args.train_file)
-    X_test, y_test_labels = load_mnist_csv(args.test_file)
+    X_train, y_train_labels = load_fashion_mnist("train", args.train_file)
+    X_test, y_test_labels = load_fashion_mnist("test", args.test_file)
     
     # One-hot encode labels
     y_train = one_hot_encode(y_train_labels)
@@ -215,7 +161,7 @@ def main():
         pred = predictions[idx]
         pred_class = pred.argmax()
         true_class = y_test_labels[idx]
-        correct = "✓" if pred_class == true_class else "✗"
+        correct = "ok" if pred_class == true_class else "XX"
         print(f"  {correct} Predicted: {CLASSES[pred_class]:15s} (conf: {pred[pred_class]:.1%}) | True: {CLASSES[true_class]}")
     
     return 0

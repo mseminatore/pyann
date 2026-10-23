@@ -132,6 +132,8 @@ class Sequential:
     # Class-level defaults so models created via __new__ (load/load_onnx) have them
     _gpu_uploaded = False
     _online_active = False
+    _weight_decay: Optional[float] = None
+    _l1_regularization: Optional[float] = None
     _gradient_clip: Optional[float] = None
     _weight_init: Optional[WeightInit] = None
     _convergence: Optional[float] = None
@@ -232,7 +234,13 @@ class Sequential:
         if loss is not None:
             self._loss = parse_loss(loss)
         if learning_rate is not None:
-            self._optimizer.learning_rate = learning_rate
+            # A loaded model has no Optimizer object; its rate lives in libann
+            if self._optimizer is not None:
+                self._optimizer.learning_rate = learning_rate
+            # Model files don't store the rate, so a loaded model needs this
+            # to keep training (fit() or train_on_batch()) at its old rate
+            if self._built:
+                lib.ann_set_learning_rate(self._ptr, learning_rate)
         if weight_decay is not None:
             self._weight_decay = weight_decay
         if l1_regularization is not None:

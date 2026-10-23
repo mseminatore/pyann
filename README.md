@@ -104,6 +104,13 @@ print(f"Accuracy: {accuracy:.2%}")
 
 ## Examples
 
+The [`examples/`](examples/) folder has complete, runnable programs: logic
+gates, noisy digit recognition, regression across activation functions,
+online learning on drifting data, and on Fashion-MNIST a CNN classifier, a
+denoising autoencoder, autoencoder anomaly detection, int8 export to a C
+header for microcontrollers, and hyperparameter search. See
+[examples/README.md](examples/README.md) for what each one shows.
+
 ### XOR Problem
 
 ```python
