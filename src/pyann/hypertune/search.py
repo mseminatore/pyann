@@ -1,12 +1,13 @@
 """Hyperparameter search algorithms."""
 
+import itertools
 import math
 import random
 import time
 from typing import List, Tuple, Optional, Callable, TYPE_CHECKING
 from dataclasses import dataclass
 
-from pyann.hypertune.space import HyperparamSpace, HypertuneResult, HypertuneOptions
+from pyann.hypertune.space import HyperparamSpace, HypertuneResult, HypertuneOptions, topology_sizes
 from pyann.callbacks import EarlyStopping
 from pyann.core.network import Sequential
 from pyann.core.layers import Dense
@@ -39,9 +40,35 @@ class BaseSearch:
         
         self.space.validate()
         self.options.validate()
+        self._topologies = self.space.topologies()
         
         if self.options.seed is not None:
             random.seed(self.options.seed)
+    
+    def _layer_sizes(self, topology: str, n_hidden: int, width_idx: List[int]) -> List[int]:
+        """Hidden layer widths: one index into space.layer_sizes per layer for
+        "any", or a single base-width index for a pattern."""
+        sizes = self.space.layer_sizes
+        if topology == "any":
+            return [sizes[i] for i in width_idx]
+        return topology_sizes(topology, sizes[width_idx[0]], n_hidden)
+    
+    def _random_structure(self) -> Tuple[int, int, List[int]]:
+        """A random (topology index, hidden layer count, width indices)."""
+        topo_idx = random.randrange(len(self._topologies))
+        n_hidden = random.randint(self.space.hidden_layers[0], self.space.hidden_layers[1])
+        n_widths = n_hidden if self._topologies[topo_idx] == "any" else 1
+        width_idx = [random.randrange(len(self.space.layer_sizes)) for _ in range(n_widths)]
+        return topo_idx, n_hidden, width_idx
+    
+    def _structure_config(self, topo_idx: int, n_hidden: int, width_idx: List[int]) -> dict:
+        """The config entries describing the hidden layers' shape."""
+        topology = self._topologies[topo_idx]
+        return {
+            "topology": topology,
+            "width_idx": list(width_idx),
+            "layer_sizes": self._layer_sizes(topology, n_hidden, width_idx),
+        }
     
     def _create_model(
         self,
@@ -154,7 +181,8 @@ class BaseSearch:
             val_loss=val_loss,
             score=score,
             best_epoch=history.get("best_epoch"),
-            training_time=training_time
+            training_time=training_time,
+            topology=config.get("topology", "any")
         )
         
         return result
@@ -240,11 +268,8 @@ class RandomSearch(BaseSearch):
         optimizer = random.choice(self.space.optimizers)
         dropout_rate = random.choice(self.space.dropout_rates)
         
-        # Sample number of hidden layers
-        n_hidden = random.randint(self.space.hidden_layers[0], self.space.hidden_layers[1])
-        
-        # Sample layer sizes
-        layer_sizes = [random.choice(self.space.layer_sizes) for _ in range(n_hidden)]
+        # Sample the hidden layers' topology, count and widths
+        topo_idx, n_hidden, width_idx = self._random_structure()
         
         # Sample activations
         activations = [random.choice(self.space.activations) for _ in range(n_hidden)]
@@ -254,8 +279,8 @@ class RandomSearch(BaseSearch):
             "batch_size": batch_size,
             "optimizer": optimizer,
             "dropout_rate": dropout_rate,
-            "layer_sizes": layer_sizes,
             "activations": activations,
+            **self._structure_config(topo_idx, n_hidden, width_idx),
         }
     
     def run(
@@ -327,35 +352,50 @@ class GridSearch(BaseSearch):
         lr_steps: int = 3
     ):
         super().__init__(space, options)
+        if lr_steps < 1:
+            raise ValueError(f"lr_steps must be at least 1, got {lr_steps}")
         self.lr_steps = lr_steps
     
     def _generate_configs(self) -> List[dict]:
         """Generate all configurations for grid search."""
         configs = []
         
-        # Learning rate values (log scale)
+        # Learning rate values (log scale; one step tries the minimum only)
         lr_min, lr_max = self.space.learning_rate
-        lr_values = [
-            math.exp(math.log(lr_min) + i * (math.log(lr_max) - math.log(lr_min)) / (self.lr_steps - 1))
-            for i in range(self.lr_steps)
-        ]
+        if self.lr_steps == 1:
+            lr_values = [lr_min]
+        else:
+            lr_values = [
+                math.exp(math.log(lr_min) + i * (math.log(lr_max) - math.log(lr_min)) / (self.lr_steps - 1))
+                for i in range(self.lr_steps)
+            ]
+        
+        # Every hidden layer shape: for "any", each combination of widths
+        # (len(layer_sizes) ** n_hidden of them); for a pattern, each base width
+        structures = []
+        n_sizes = len(self.space.layer_sizes)
+        for topo_idx, topology in enumerate(self._topologies):
+            for n_hidden in range(self.space.hidden_layers[0], self.space.hidden_layers[1] + 1):
+                n_widths = n_hidden if topology == "any" else 1
+                for width_idx in itertools.product(range(n_sizes), repeat=n_widths):
+                    structures.append(self._structure_config(topo_idx, n_hidden, list(width_idx)))
         
         # Generate all combinations
         for lr in lr_values:
             for batch_size in self.space.batch_sizes:
                 for optimizer in self.space.optimizers:
                     for dropout in self.space.dropout_rates:
-                        for n_hidden in range(self.space.hidden_layers[0], self.space.hidden_layers[1] + 1):
-                            for layer_size in self.space.layer_sizes:
-                                for activation in self.space.activations:
-                                    configs.append({
-                                        "learning_rate": lr,
-                                        "batch_size": batch_size,
-                                        "optimizer": optimizer,
-                                        "dropout_rate": dropout,
-                                        "layer_sizes": [layer_size] * n_hidden,
-                                        "activations": [activation] * n_hidden,
-                                    })
+                        for structure in structures:
+                            n_hidden = len(structure["layer_sizes"])
+                            for activation in self.space.activations:
+                                configs.append({
+                                    "learning_rate": lr,
+                                    "batch_size": batch_size,
+                                    "optimizer": optimizer,
+                                    "dropout_rate": dropout,
+                                    "activations": [activation] * n_hidden,
+                                    **structure,
+                                })
         
         return configs
     
@@ -441,21 +481,20 @@ class BayesianSearch(BaseSearch):
         lr_min, lr_max = self.space.learning_rate
         log_lr = random.uniform(math.log(lr_min), math.log(lr_max))
         
-        n_hidden = random.randint(self.space.hidden_layers[0], self.space.hidden_layers[1])
+        topo_idx, n_hidden, width_idx = self._random_structure()
         
         return {
             "learning_rate": math.exp(log_lr),
             "batch_size": random.choice(self.space.batch_sizes),
             "optimizer": random.choice(self.space.optimizers),
             "dropout_rate": random.choice(self.space.dropout_rates),
-            "layer_sizes": [random.choice(self.space.layer_sizes) for _ in range(n_hidden)],
             "activations": [random.choice(self.space.activations) for _ in range(n_hidden)],
+            **self._structure_config(topo_idx, n_hidden, width_idx),
         }
     
     def _perturb_config(self, config: dict) -> dict:
         """Perturb a configuration slightly."""
         new_config = config.copy()
-        new_config["layer_sizes"] = config["layer_sizes"].copy()
         new_config["activations"] = config["activations"].copy()
         
         # Perturb learning rate
@@ -469,10 +508,18 @@ class BayesianSearch(BaseSearch):
         if random.random() < 0.3:
             new_config["batch_size"] = random.choice(self.space.batch_sizes)
         
-        # Possibly change a layer size
-        if new_config["layer_sizes"] and random.random() < 0.3:
-            idx = random.randrange(len(new_config["layer_sizes"]))
-            new_config["layer_sizes"][idx] = random.choice(self.space.layer_sizes)
+        # Possibly change the topology, then possibly one width (a layer's
+        # for "any", the base width for a pattern)
+        topo_idx = self._topologies.index(config["topology"])
+        n_hidden = len(config["layer_sizes"])
+        width_idx = list(config["width_idx"])
+        if len(self._topologies) > 1 and random.random() < 0.2:
+            topo_idx = random.randrange(len(self._topologies))
+            n_widths = n_hidden if self._topologies[topo_idx] == "any" else 1
+            width_idx = [width_idx[0]] * n_widths
+        if random.random() < 0.3:
+            width_idx[random.randrange(len(width_idx))] = random.randrange(len(self.space.layer_sizes))
+        new_config.update(self._structure_config(topo_idx, n_hidden, width_idx))
         
         return new_config
     
@@ -622,31 +669,31 @@ class TPESearch(BaseSearch):
         opt_idx = random.randrange(len(self.space.optimizers))
         dropout_idx = random.randrange(len(self.space.dropout_rates))
         act_idx = random.randrange(len(self.space.activations))
+        topo_idx, n_hidden, width_idx = self._random_structure()
         
-        n_hidden = random.randint(
-            self.space.hidden_layers[0], self.space.hidden_layers[1]
-        )
-        layers_idx = n_hidden - self.space.hidden_layers[0]
-        
-        layer_sizes = [random.choice(self.space.layer_sizes) for _ in range(n_hidden)]
-        
-        config = {
-            "learning_rate": math.exp(log_lr),
-            "batch_size": self.space.batch_sizes[batch_idx],
-            "optimizer": self.space.optimizers[opt_idx],
-            "dropout_rate": self.space.dropout_rates[dropout_idx],
-            "layer_sizes": layer_sizes,
-            "activations": [self.space.activations[act_idx]] * n_hidden,
-        }
         indices = {
             "log_lr": log_lr,
             "batch_idx": batch_idx,
             "opt_idx": opt_idx,
             "dropout_idx": dropout_idx,
             "act_idx": act_idx,
-            "layers_idx": layers_idx,
+            "layers_idx": n_hidden - self.space.hidden_layers[0],
+            "topo_idx": topo_idx,
+            "width_idx": width_idx,
         }
-        return config, indices
+        return self._config_from_indices(indices), indices
+    
+    def _config_from_indices(self, indices: dict) -> dict:
+        """The configuration an indices dict describes."""
+        n_hidden = indices["layers_idx"] + self.space.hidden_layers[0]
+        return {
+            "learning_rate": math.exp(indices["log_lr"]),
+            "batch_size": self.space.batch_sizes[indices["batch_idx"]],
+            "optimizer": self.space.optimizers[indices["opt_idx"]],
+            "dropout_rate": self.space.dropout_rates[indices["dropout_idx"]],
+            "activations": [self.space.activations[indices["act_idx"]]] * n_hidden,
+            **self._structure_config(indices["topo_idx"], n_hidden, indices["width_idx"]),
+        }
     
     def _tpe_sample_config(self) -> Tuple[dict, dict]:
         """Sample a config using TPE (l(x)/g(x) maximization)."""
@@ -659,81 +706,59 @@ class TPESearch(BaseSearch):
         
         good_lr = [o["log_lr"] for o in good_obs]
         bad_lr = [o["log_lr"] for o in bad_obs]
-        good_batch = [o["batch_idx"] for o in good_obs]
-        bad_batch = [o["batch_idx"] for o in bad_obs]
-        good_opt = [o["opt_idx"] for o in good_obs]
-        bad_opt = [o["opt_idx"] for o in bad_obs]
-        good_dropout = [o["dropout_idx"] for o in good_obs]
-        bad_dropout = [o["dropout_idx"] for o in bad_obs]
-        good_act = [o["act_idx"] for o in good_obs]
-        bad_act = [o["act_idx"] for o in bad_obs]
-        good_layers = [o["layers_idx"] for o in good_obs]
-        bad_layers = [o["layers_idx"] for o in bad_obs]
-        
-        n_batch = len(self.space.batch_sizes)
-        n_opt = len(self.space.optimizers)
-        n_dropout = len(self.space.dropout_rates)
-        n_act = len(self.space.activations)
-        n_layer_opts = self.space.hidden_layers[1] - self.space.hidden_layers[0] + 1
-        
         bw_good_lr = _scott_bandwidth(good_lr, self.bandwidth_factor)
         bw_bad_lr = _scott_bandwidth(bad_lr, self.bandwidth_factor)
         
         lr_min, lr_max = self.space.learning_rate
         log_min, log_max = math.log(lr_min), math.log(lr_max)
         
+        # Categorical dimensions: name -> number of choices
+        categories = {
+            "batch_idx": len(self.space.batch_sizes),
+            "opt_idx": len(self.space.optimizers),
+            "dropout_idx": len(self.space.dropout_rates),
+            "act_idx": len(self.space.activations),
+            "layers_idx": self.space.hidden_layers[1] - self.space.hidden_layers[0] + 1,
+            "topo_idx": len(self._topologies),
+        }
+        n_sizes = len(self.space.layer_sizes)
+        
+        def log_ratio(value: int, good: List[int], bad: List[int], n: int) -> float:
+            return math.log(_categorical_prob(value, good, n) / _categorical_prob(value, bad, n))
+        
+        def widths_at(obs: List[dict], position: int) -> List[int]:
+            return [o["width_idx"][position] for o in obs if len(o["width_idx"]) > position]
+        
         best_ratio = float('-inf')
-        best_cand = None
         best_indices = None
         
         for _ in range(self.n_candidates):
-            lr = _kde_sample(good_lr, bw_good_lr)
-            lr = max(log_min, min(log_max, lr))
-            
-            batch_idx = _categorical_sample(good_batch, n_batch)
-            opt_idx = _categorical_sample(good_opt, n_opt)
-            dropout_idx = _categorical_sample(good_dropout, n_dropout)
-            act_idx = _categorical_sample(good_act, n_act)
-            layers_idx = _categorical_sample(good_layers, n_layer_opts)
-            
+            lr = max(log_min, min(log_max, _kde_sample(good_lr, bw_good_lr)))
             # EI ratio in log space for numerical stability
-            ratio = (
-                math.log(_kde_evaluate(lr, good_lr, bw_good_lr)
-                         / _kde_evaluate(lr, bad_lr, bw_bad_lr))
-                + math.log(_categorical_prob(batch_idx, good_batch, n_batch)
-                           / _categorical_prob(batch_idx, bad_batch, n_batch))
-                + math.log(_categorical_prob(opt_idx, good_opt, n_opt)
-                           / _categorical_prob(opt_idx, bad_opt, n_opt))
-                + math.log(_categorical_prob(dropout_idx, good_dropout, n_dropout)
-                           / _categorical_prob(dropout_idx, bad_dropout, n_dropout))
-                + math.log(_categorical_prob(act_idx, good_act, n_act)
-                           / _categorical_prob(act_idx, bad_act, n_act))
-                + math.log(_categorical_prob(layers_idx, good_layers, n_layer_opts)
-                           / _categorical_prob(layers_idx, bad_layers, n_layer_opts))
-            )
+            ratio = math.log(_kde_evaluate(lr, good_lr, bw_good_lr)
+                             / _kde_evaluate(lr, bad_lr, bw_bad_lr))
+            indices = {"log_lr": lr}
+            for name, n in categories.items():
+                good = [o[name] for o in good_obs]
+                indices[name] = _categorical_sample(good, n)
+                ratio += log_ratio(indices[name], good, [o[name] for o in bad_obs], n)
+            
+            # Widths: one per layer for "any", the base width for a pattern;
+            # each position is modelled from the trials that had it
+            n_hidden = indices["layers_idx"] + self.space.hidden_layers[0]
+            n_widths = n_hidden if self._topologies[indices["topo_idx"]] == "any" else 1
+            indices["width_idx"] = []
+            for position in range(n_widths):
+                good = widths_at(good_obs, position)
+                width = _categorical_sample(good, n_sizes)
+                indices["width_idx"].append(width)
+                ratio += log_ratio(width, good, widths_at(bad_obs, position), n_sizes)
             
             if ratio > best_ratio:
                 best_ratio = ratio
-                n_hidden = layers_idx + self.space.hidden_layers[0]
-                best_indices = {
-                    "log_lr": lr,
-                    "batch_idx": batch_idx,
-                    "opt_idx": opt_idx,
-                    "dropout_idx": dropout_idx,
-                    "act_idx": act_idx,
-                    "layers_idx": layers_idx,
-                }
-                best_cand = {
-                    "learning_rate": math.exp(lr),
-                    "batch_size": self.space.batch_sizes[batch_idx],
-                    "optimizer": self.space.optimizers[opt_idx],
-                    "dropout_rate": self.space.dropout_rates[dropout_idx],
-                    "layer_sizes": [random.choice(self.space.layer_sizes)
-                                    for _ in range(n_hidden)],
-                    "activations": [self.space.activations[act_idx]] * n_hidden,
-                }
+                best_indices = indices
         
-        return best_cand, best_indices
+        return self._config_from_indices(best_indices), best_indices
     
     def run(
         self,

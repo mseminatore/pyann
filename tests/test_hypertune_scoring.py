@@ -5,7 +5,7 @@ import math
 import pytest
 
 from pyann.hypertune.search import BayesianSearch, GridSearch, RandomSearch, TPESearch, _rank
-from pyann.hypertune.space import HyperparamSpace, HypertuneOptions, HypertuneResult
+from pyann.hypertune.space import HyperparamSpace, HypertuneOptions, HypertuneResult, topology_sizes
 from pyann.optimizers import OptimizerType
 
 np = pytest.importorskip("numpy")
@@ -128,3 +128,91 @@ class TestEarlyStopping:
         _, results = RandomSearch(small_space(epochs=5), n_trials=1, options=quiet(early_stopping=False)).run(
             *blobs(), input_size=2, output_size=2)
         assert results[0].best_epoch is None
+
+
+class TestTopology:
+    """HyperparamSpace.topology shapes the hidden layers in every search."""
+
+    @pytest.mark.parametrize("topology, base, count, expected", [
+        ("constant", 64, 3, [64, 64, 64]),
+        ("pyramid", 128, 3, [128, 64, 32]),
+        ("pyramid", 16, 3, [16, 8, 8]),                   # never narrower than 8
+        ("inverse", 128, 3, [32, 64, 128]),
+        ("funnel", 32, 3, [32, 64, 32]),
+        ("funnel", 32, 5, [32, 64, 128, 64, 32]),
+        ("funnel", 32, 7, [32, 64, 128, 128, 128, 64, 32]),  # widening capped at 4x
+    ])
+    def test_sizes_match_libann(self, topology, base, count, expected):
+        assert topology_sizes(topology, base, count) == expected
+
+    def test_names_and_aliases(self):
+        assert HyperparamSpace().topologies() == ["any"]
+        space = HyperparamSpace(topology=["uniform", "constant", "diamond"])
+        assert space.topologies() == ["constant", "funnel"]
+
+    @pytest.mark.parametrize("topology", ["triangle", []])
+    def test_invalid(self, topology):
+        with pytest.raises(ValueError):
+            HyperparamSpace(topology=topology).validate()
+
+    @pytest.mark.parametrize("make_search", [
+        lambda space: RandomSearch(space, n_trials=4, options=quiet()),
+        lambda space: BayesianSearch(space, n_trials=6, n_initial=2, options=quiet()),
+        lambda space: TPESearch(space, n_trials=6, n_startup=2, options=quiet()),
+    ], ids=["random", "bayesian", "tpe"])
+    def test_pyramid_trials(self, make_search):
+        space = small_space(topology="pyramid", hidden_layers=(2, 3), layer_sizes=[16, 32], epochs=3)
+        _, results = make_search(space).run(*blobs(), input_size=2, output_size=2)
+        for r in results:
+            assert r.topology == "pyramid"
+            assert r.layer_sizes == topology_sizes("pyramid", r.layer_sizes[0], len(r.layer_sizes))
+
+    def test_any_picks_each_width_from_layer_sizes(self):
+        space = small_space(hidden_layers=(3, 3), layer_sizes=[4, 8], epochs=2)
+        _, results = RandomSearch(space, n_trials=4, options=quiet()).run(*blobs(), input_size=2, output_size=2)
+        assert all(r.topology == "any" and set(r.layer_sizes) <= {4, 8} for r in results)
+
+    def test_grid_covers_every_shape(self):
+        patterns = GridSearch(small_space(topology=["constant", "pyramid"], hidden_layers=(1, 2),
+                                          layer_sizes=[16, 32]), lr_steps=1)._generate_configs()
+        shapes = {(c["topology"], tuple(c["layer_sizes"])) for c in patterns}
+        assert shapes == {("constant", (16,)), ("constant", (32,)), ("constant", (16, 16)), ("constant", (32, 32)),
+                          ("pyramid", (16,)), ("pyramid", (32,)), ("pyramid", (16, 8)), ("pyramid", (32, 16))}
+
+        anything = GridSearch(small_space(hidden_layers=(2, 2), layer_sizes=[4, 8]), lr_steps=1)._generate_configs()
+        assert sorted(c["layer_sizes"] for c in anything) == [[4, 4], [4, 8], [8, 4], [8, 8]]
+
+    def test_grid_rejects_zero_lr_steps(self):
+        with pytest.raises(ValueError):
+            GridSearch(small_space(), lr_steps=0)
+
+    def test_bayesian_perturbation_keeps_shapes_consistent(self):
+        search = BayesianSearch(small_space(topology=["any", "pyramid", "inverse"], hidden_layers=(1, 3),
+                                            layer_sizes=[16, 32, 64]), options=quiet())
+        config = search._random_config()
+        for _ in range(200):
+            config = search._perturb_config(config)
+            n = len(config["layer_sizes"])
+            assert config["layer_sizes"] == search._layer_sizes(config["topology"], n, config["width_idx"])
+
+
+class TestTPEModelsWidths:
+    """TPE learns which widths and topologies score well, instead of drawing widths at random."""
+
+    def observations(self, search, good_width, good_topo, n=30):
+        for i in range(n):
+            good = i % 3 == 0
+            indices = {"log_lr": math.log(0.01), "batch_idx": 0, "opt_idx": 0, "dropout_idx": 0,
+                       "act_idx": 0, "layers_idx": 1,
+                       "topo_idx": good_topo if good else 1 - good_topo,
+                       "width_idx": [good_width if good else 1 - good_width]}
+            search._observations.append((indices, 1.0 if good else 0.0))
+
+    def test_prefers_the_good_width_and_topology(self):
+        space = small_space(topology=["constant", "pyramid"], hidden_layers=(1, 2), layer_sizes=[16, 64])
+        search = TPESearch(space, gamma=0.3, n_candidates=24, options=quiet())
+        self.observations(search, good_width=1, good_topo=1)
+        picks = [search._tpe_sample_config() for _ in range(40)]
+        assert sum(ind["width_idx"][0] == 1 for _, ind in picks) >= 36
+        assert sum(cfg["topology"] == "pyramid" for cfg, _ in picks) >= 36
+        assert all(cfg["layer_sizes"][0] == 64 for cfg, ind in picks if ind["width_idx"][0] == 1)

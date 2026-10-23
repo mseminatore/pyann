@@ -8,6 +8,32 @@ from pyann.activations import Activation
 from pyann.optimizers import OptimizerType
 
 
+#: Topology patterns: "any" lets each layer pick its own width; the others
+#: derive every width from one base width, as libann's hypertuner does
+TOPOLOGIES = ("any", "constant", "pyramid", "inverse", "funnel")
+_TOPOLOGY_ALIASES = {"uniform": "constant", "diamond": "funnel"}
+_MIN_WIDTH = 8   # the narrowest layer a pattern makes (as in libann)
+
+
+def topology_sizes(topology: str, base: int, count: int) -> List[int]:
+    """Hidden layer widths for a topology pattern, like libann's hypertune_generate_topology().
+    
+    Args:
+        topology: "constant", "pyramid", "inverse" or "funnel"
+        base: The base width
+        count: Number of hidden layers
+    """
+    if topology == "pyramid":       # base, base/2, base/4, ...
+        return [max(_MIN_WIDTH, base >> i) for i in range(count)]
+    if topology == "inverse":       # ..., base/4, base/2, base
+        return [max(_MIN_WIDTH, base >> (count - 1 - i)) for i in range(count)]
+    if topology == "funnel":        # base, 2*base, ... (at most 4*base), then back down
+        mid = count // 2
+        return [min(base << i, base * 4) if i <= mid else max(_MIN_WIDTH, base << (count - 1 - i))
+                for i in range(count)]
+    return [base] * count
+
+
 @dataclass
 class HyperparamSpace:
     """Configuration for hyperparameter search space.
@@ -23,6 +49,16 @@ class HyperparamSpace:
         layer_sizes: List of possible layer sizes
         activations: List of activation functions to try
         dropout_rates: List of dropout rates to try
+        topology: How the hidden layers' widths relate, or a list of
+            patterns to search over (see TOPOLOGIES): "any" (each layer
+            picks its own width from layer_sizes), or a pattern that grows
+            every width from one base width picked from layer_sizes:
+            "constant" (all the same), "pyramid" (halving toward the
+            output), "inverse" (doubling toward the output) or "funnel"
+            (widening, then narrowing). The patterns match libann's
+            hypertuner. "uniform" and "diamond" are accepted for "constant"
+            and "funnel".
+        epochs: Maximum epochs for each trial (fewer with early stopping)
         
     Example:
         >>> space = HyperparamSpace(
@@ -62,8 +98,8 @@ class HyperparamSpace:
         default_factory=lambda: [0.0, 0.2, 0.5]
     )
     
-    # Topology patterns
-    topology: str = "uniform"  # "uniform", "pyramid", "funnel", "diamond"
+    # Topology pattern(s): "any", "constant", "pyramid", "inverse", "funnel"
+    topology: Union[str, List[str]] = "any"
     
     # Maximum epochs for each trial (fewer with early stopping)
     epochs: int = 50
@@ -89,6 +125,22 @@ class HyperparamSpace:
             raise ValueError("At least one layer size must be specified")
         if any(ls <= 0 for ls in self.layer_sizes):
             raise ValueError("Layer sizes must be positive")
+        
+        self.topologies()   # raises for unknown names
+    
+    def topologies(self) -> List[str]:
+        """The topology patterns to search, by their canonical names."""
+        names = [self.topology] if isinstance(self.topology, str) else list(self.topology)
+        if not names:
+            raise ValueError("At least one topology must be specified")
+        result = []
+        for name in names:
+            key = _TOPOLOGY_ALIASES.get(name, name)
+            if key not in TOPOLOGIES:
+                raise ValueError(f"Unknown topology {name!r}; valid: {', '.join(TOPOLOGIES)}")
+            if key not in result:
+                result.append(key)
+        return result
 
 
 @dataclass
@@ -113,6 +165,7 @@ class HypertuneResult:
         best_epoch: With early stopping, the epoch whose weights the model
             kept; None without it
         training_time: Seconds spent training the trial
+        topology: The topology pattern that made layer_sizes
     """
     learning_rate: float
     batch_size: int
@@ -128,6 +181,7 @@ class HypertuneResult:
     score: float = math.nan
     best_epoch: Optional[int] = None
     training_time: float = 0.0
+    topology: str = "any"
     
     def to_dict(self) -> dict:
         """Convert to dictionary."""
@@ -146,6 +200,7 @@ class HypertuneResult:
             "score": self.score,
             "best_epoch": self.best_epoch,
             "training_time": self.training_time,
+            "topology": self.topology,
         }
 
 

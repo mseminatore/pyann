@@ -337,6 +337,35 @@ and keeps its best epoch's weights. Each result records:
 `seed` makes the sampled configurations repeatable. It doesn't seed libann's
 weight initialization.
 
+### Network Shapes in Searches
+
+`HyperparamSpace.topology` sets how the hidden layers' widths relate. It takes
+one pattern or a list of patterns to search over:
+
+| Topology | Widths for base 128, 3 layers |
+|---|---|
+| `"any"` (default) | each layer picks its own width from `layer_sizes` |
+| `"constant"` | 128, 128, 128 |
+| `"pyramid"` | 128, 64, 32 |
+| `"inverse"` | 32, 64, 128 |
+| `"funnel"` | 128, 256, 128 |
+
+The patterns pick one base width from `layer_sizes` and build every layer's
+width from it, as libann's hypertuner does: no layer is narrower than 8, and
+`"funnel"` widens to at most 4x the base. `"uniform"` and `"diamond"` are
+accepted as names for `"constant"` and `"funnel"`. TPE learns which topologies
+and widths score well, not just learning rates and batch sizes. `GridSearch`
+tries every base width for a pattern, and every combination of widths for
+`"any"` (`len(layer_sizes) ** layers` of them).
+
+```python
+space = HyperparamSpace(topology=["constant", "pyramid"], hidden_layers=(2, 4),
+                        layer_sizes=[64, 128, 256])
+best, _ = TPESearch(space, n_trials=40).run(X_train, y_train, X_val, y_val,
+                                           input_size=784, output_size=10)
+print(best.topology, best.layer_sizes)   # e.g. pyramid [256, 128, 64]
+```
+
 ### Save and Load
 
 ```python
@@ -570,7 +599,7 @@ logging.getLogger("pyann").setLevel(logging.DEBUG)
 
 pyann covers libann's training, inference, persistence, regularization and GPU features. These parts of libann's C API have no Python equivalent yet:
 
-- **libann's native hypertuner** (`ann_hypertune.h`). `pyann.hypertune` is a separate Python implementation, so its search spaces and results differ from the C one (for example topology names, per-layer activation search, and the Gaussian-process settings).
+- **libann's native hypertuner** (`ann_hypertune.h`). `pyann.hypertune` is a separate Python implementation, so its search spaces and results differ from the C one (for example per-layer activation search and the Gaussian-process settings). Its topology patterns produce the same widths as libann's.
 - **Error-log callbacks**: pyann installs its own, so libann errors surface in the Python exception instead of on stderr (see [Errors](#errors)).
 - **Tensor math** (gemm, elementwise ops and so on): use NumPy.
 
