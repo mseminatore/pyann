@@ -597,8 +597,9 @@ All accept a `HyperparamSpace` and return `(best_result, all_results)` from `run
   candidate with the highest Expected Improvement. Half of the candidates are
   random and half are small changes to the best trial.
 - **Cost:** it takes longer than TPE to choose each trial, about a second over
-  30 trials in pure Python, but it usually needs fewer trials. That suits
-  budgets of expensive trials.
+  30 trials in pure Python. That's small next to training. On a 20-trial
+  Fashion-MNIST search it found configurations about as good as TPE's and
+  random search's, so try both on your problem.
 
 ### Errors
 
