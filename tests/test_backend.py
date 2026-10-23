@@ -27,7 +27,8 @@ def _expected_gpu():
         value = os.environ["PYANN_EXPECT_GPU"]
         return None if value == "none" else value
     if os.environ.get("CIBUILDWHEEL"):
-        return "metal" if sys.platform == "darwin" else None
+        # Linux and Windows wheels build Vulkan from vulkan_prebuilt/
+        return "metal" if sys.platform == "darwin" else "vulkan"
     return "unset"
 
 

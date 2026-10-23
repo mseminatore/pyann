@@ -35,8 +35,10 @@ Pre-built wheels include the native library, so no compiler is needed:
 | Platform | BLAS | GPU |
 |---|---|---|
 | macOS (Apple silicon, 12+) | Accelerate | Metal |
-| Linux x86_64 and aarch64 (glibc, manylinux2014+) | OpenBLAS | - |
-| Windows x86_64 | OpenBLAS | - |
+| Linux x86_64 and aarch64 (glibc, manylinux2014+) | OpenBLAS | Vulkan |
+| Windows x86_64 | OpenBLAS | Vulkan |
+
+GPU use is opt-in (`pyann.enable_gpu()`). Vulkan needs only a GPU driver with Vulkan 1.1, which current AMD, Intel and NVIDIA drivers include; without one, `enable_gpu()` returns `False` and everything runs on the CPU with BLAS.
 
 On other platforms `pip` builds from source, which needs CMake and a C compiler (see below). NumPy is optional: `pip install "pylibann[numpy]"`.
 
@@ -53,7 +55,7 @@ The build picks the same acceleration as the wheels. On Linux and Windows it dow
 
 ```bash
 CMAKE_ARGS="-DUSE_CUDA=ON" pip install -e .                                 # NVIDIA CUDA (Linux/Windows)
-CMAKE_ARGS="-DUSE_VULKAN=ON" pip install -e .                               # Vulkan (Linux/Windows; needs Vulkan headers + glslc)
+CMAKE_ARGS="-DUSE_VULKAN=OFF" pip install -e .                              # no Vulkan (Linux/Windows)
 CMAKE_ARGS="-DUSE_CBLAS=ON" pip install -e .                                # CBLAS from /opt/cblas
 CMAKE_ARGS="-DUSE_BLAS=ON" pip install -e .                                 # system OpenBLAS from /opt/OpenBLAS
 CMAKE_ARGS="-DUSE_METAL=OFF -DUSE_ACCELERATE=OFF" pip install -e .          # plain CPU build
@@ -67,7 +69,7 @@ CMAKE_ARGS="-DUSE_METAL=OFF -DUSE_ACCELERATE=OFF" pip install -e .          # pl
 | `USE_BLAS` | OpenBLAS installed at `/opt/OpenBLAS` |
 | `USE_CBLAS` | [CBLAS](https://github.com/mseminatore/cblas) installed at `/opt/cblas` |
 | `USE_CUDA` | NVIDIA CUDA GPU backend |
-| `USE_VULKAN` | Vulkan GPU backend (AMD, Intel, NVIDIA). Building needs the Vulkan headers and `glslc`; the library loads the Vulkan driver at run time and falls back to the CPU without one |
+| `USE_VULKAN` | Vulkan GPU backend (AMD, Intel, NVIDIA): `ON`, `OFF` or `AUTO` (Linux/Windows default: built when it can be). Building needs the Vulkan headers and `glslc` (the [Vulkan SDK](https://vulkan.lunarg.com/), or `libvulkan-dev` and `glslc`), or the prebuilt shaders the sdist ships (`python tools/prepare_vulkan.py` writes them to `vulkan_prebuilt/`). The library loads the Vulkan driver at run time and falls back to the CPU without one |
 
 `python build_lib.py [--accelerate | --scipy-openblas | --cblas | --blas] [--metal] [--cuda] [--vulkan] [--clean]` builds just the shared library into `src/pyann/lib/` without installing, which is handy when working on the C side. Set `PYANN_LIB_PATH` to load a library from another location.
 
@@ -541,7 +543,7 @@ The CPU path uses the BLAS the library was built with (see `backend_info()["blas
 import pyann
 
 if pyann.enable_gpu():          # True when a GPU backend is compiled in and a device is available
-    print("Using", pyann.backend_info()["gpu_active"])   # 'metal', 'cuda' or 'vulkan'
+    print("Using", pyann.backend_info()["gpu_active"])   # 'metal', 'vulkan' or 'cuda'
 
 model.fit(X, y, epochs=10)      # trains on the GPU when enabled
 model.predict(X)                # batch inference on the GPU when enabled
@@ -552,8 +554,8 @@ If no GPU backend is built in, or no device is found, `enable_gpu()` returns `Fa
 Notes:
 - `enable_gpu()` applies to the whole process and cannot be undone.
 - GPU speedups depend on problem size. In an informal test on Apple silicon (batch size 128) Metal sped up batch inference but was several times slower than the CPU for training, which is why it is not enabled automatically. Measure your own workload.
-- The macOS wheels include Metal. Vulkan and CUDA are only available when building from source with `USE_VULKAN=ON` or `USE_CUDA=ON`; CUDA has had little testing.
-- A build with several GPU backends tries them in the order Metal, CUDA, Vulkan. Set the `ANN_GPU` environment variable (`metal`, `cuda`, `vulkan` or `none`) before `enable_gpu()` to pick one; `backend_info()["gpu_active"]` names the one that started.
+- The macOS wheels include Metal, and the Linux and Windows wheels Vulkan. CUDA is only available when building from source with `USE_CUDA=ON`, runs dense networks only, and has had little testing.
+- A build with several GPU backends tries them in the order Metal, Vulkan, CUDA. Set the `ANN_GPU` environment variable (`metal`, `vulkan`, `cuda` or `none`) before `enable_gpu()` to pick one; `backend_info()["gpu_active"]` names the one that started.
 - `predict()` runs the whole input as one batch call.
 
 ## License

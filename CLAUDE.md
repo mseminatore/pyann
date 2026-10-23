@@ -19,7 +19,8 @@ pip install -e ".[dev]"
 
 # Pass CMake options through CMAKE_ARGS, e.g. CUDA or a plain CPU build
 CMAKE_ARGS="-DUSE_CUDA=ON" pip install -e .
-CMAKE_ARGS="-DUSE_VULKAN=ON" pip install -e .     # needs Vulkan headers + glslc
+CMAKE_ARGS="-DUSE_VULKAN=OFF" pip install -e .    # Linux/Windows default is AUTO
+python tools/prepare_vulkan.py                     # vulkan_prebuilt/: shaders + headers (needs glslc)
 CMAKE_ARGS="-DUSE_METAL=OFF -DUSE_ACCELERATE=OFF" pip install -e .
 
 # Or build only the shared library into src/pyann/lib/ (no install)
@@ -38,7 +39,7 @@ pip wheel . --no-deps -w dist
 python -m build --sdist
 ```
 
-The `ann/` submodule must be checked out (`git submodule update --init`). Wheels default to Accelerate+Metal on macOS and the bundled `scipy-openblas32` OpenBLAS on Linux/Windows (see `[[tool.scikit-build.overrides]]` in `pyproject.toml`). CI (`.github/workflows/wheels.yml`) builds and tests wheels with cibuildwheel; `tests/test_backend.py` fails a wheel that lost its BLAS. `USE_VULKAN` builds libann's GLSL shaders with `glslc` and embeds them (the same steps as libann's CMakeLists.txt; keep the shader list in sync when bumping `ann/`); the library opens the Vulkan loader at run time, so it has no link dependency on it. `.github/workflows/blas-bench.yml` (manual) compares BLAS libraries using `benchmarks/`.
+The `ann/` submodule must be checked out (`git submodule update --init`). Wheels default to Accelerate+Metal on macOS and the bundled `scipy-openblas32` OpenBLAS + Vulkan on Linux/Windows (see `[[tool.scikit-build.overrides]]` in `pyproject.toml`). CI (`.github/workflows/wheels.yml`) builds and tests wheels with cibuildwheel; `tests/test_backend.py` fails a wheel that lost its BLAS or GPU backend. `USE_VULKAN` (`ON`/`OFF`/`AUTO`) compiles libann's GLSL shaders with `glslc` and embeds them (the same steps as libann's CMakeLists.txt; keep the shader list in sync when bumping `ann/`), or, without glslc, uses `vulkan_prebuilt/` (compiled shader header + Vulkan C headers, written by `tools/prepare_vulkan.py`; git-ignored, shipped in the sdist via `sdist.include`). CI's `vulkan-prebuilt` job writes it once for the sdist and every wheel job, and `vulkan-gpu` runs the Linux wheel on lavapipe so the backend must actually start. The library opens the Vulkan loader at run time, so it has no link dependency on it and falls back to the CPU without a driver. `.github/workflows/blas-bench.yml` (manual) compares BLAS libraries using `benchmarks/`.
 
 The built shared library goes to `src/pyann/lib/` for dev builds. Override with `PYANN_LIB_PATH` env var.
 
