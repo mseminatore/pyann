@@ -108,6 +108,23 @@ class TestAppliedToNetwork:
         model.compile(gradient_clip=3.0)
         assert spy.args("ann_set_gradient_clip") == [(pytest.approx(3.0),)]
 
+    def test_learning_rate_after_build_applies_immediately(self, spy):
+        model = make_model()
+        model._build()
+        model.compile(learning_rate=0.0123)
+        assert spy.args("ann_set_learning_rate")[-1] == (pytest.approx(0.0123),)
+
+    def test_learning_rate_on_a_loaded_model(self, spy, tmp_path):
+        """Model files don't store the rate; compile() restores it without an Optimizer object."""
+        model = make_model()
+        model.compile(optimizer="adam")
+        model._build()
+        model.save(tmp_path / "m.nna")
+
+        loaded = Sequential.load(tmp_path / "m.nna")
+        loaded.compile(learning_rate=0.02)
+        assert spy.args("ann_set_learning_rate")[-1] == (pytest.approx(0.02),)
+
     def test_zero_gradient_clip_is_passed_through(self, spy):
         """0 disables clipping in libann, so it must reach the library."""
         model = make_model()
