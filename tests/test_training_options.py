@@ -4,7 +4,7 @@ import pytest
 
 import pyann.core.network as network_module
 from pyann import Dense, Sequential, WeightInit
-from pyann.callbacks import EarlyStopping
+from pyann.callbacks import EarlyStopping, ExponentialDecay
 from pyann.exceptions import InvalidParameterError
 from pyann._bindings.ffi import lib
 from pyann.weight_init import parse_weight_init
@@ -267,6 +267,70 @@ def flush_c_stdio():
         ctypes.cdll.ucrtbase.fflush(None)  # MSVC builds use the Universal CRT
     else:
         ctypes.CDLL(None).fflush(None)
+
+
+class TestTrainingHistory:
+    """fit()'s epochs_trained and Sequential.training_history(), from libann's history."""
+
+    def test_one_entry_per_epoch(self):
+        x, y = separable_data()
+        model = make_model()
+        model.compile(convergence=0.0)
+        history = model.fit(x, y, epochs=4, verbose=0)
+        epochs = model.training_history()
+        assert history["epochs_trained"] == 4
+        assert len(epochs["loss"]) == len(epochs["lr"]) == len(epochs["val_loss"]) == 4
+        assert epochs["loss"][-1] == pytest.approx(history["loss"])
+        assert epochs["val_loss"] == [None] * 4         # no validation data
+
+    def test_learning_rate_per_epoch_follows_the_scheduler(self):
+        x, y = separable_data()
+        model = make_model()
+        model.compile(learning_rate=0.01, convergence=0.0)
+        model.fit(x, y, epochs=3, verbose=0, lr_scheduler=ExponentialDecay(gamma=0.5))
+        assert model.training_history()["lr"] == pytest.approx([0.01, 0.005, 0.0025])
+
+    def test_validation_loss_per_epoch(self):
+        x, y = separable_data()
+        x_val, y_val = separable_data(seed=1)
+        model = make_model()
+        model.compile(convergence=0.0)
+        history = model.fit(x, y, epochs=3, verbose=0, validation_data=(x_val, y_val))
+        val_loss = model.training_history()["val_loss"]
+        assert all(v is not None and v > 0 for v in val_loss)
+        assert val_loss[-1] == pytest.approx(history["val_loss"], rel=1e-4)
+
+    def test_early_stopping_trains_fewer_epochs(self):
+        x, y = separable_data()
+        x_val, y_val = separable_data(seed=1)
+        model = make_model()
+        model.compile(convergence=0.0)
+        history = model.fit(x, 1 - y, epochs=500, verbose=0, validation_data=(x_val, y_val),
+                            callbacks=[EarlyStopping(patience=2)])
+        assert history["best_epoch"] <= history["epochs_trained"] < 500
+        assert len(model.training_history()["loss"]) == history["epochs_trained"]
+
+    def test_accumulates_until_cleared(self):
+        x, y = separable_data()
+        model = make_model()
+        model.compile(convergence=0.0)
+        model.fit(x, y, epochs=2, verbose=0)
+        history = model.fit(x, y, epochs=3, verbose=0)
+        assert history["epochs_trained"] == 3
+        assert len(model.training_history()["loss"]) == 5
+        model.clear_history()
+        assert model.training_history() == {"loss": [], "lr": [], "val_loss": []}
+
+    def test_empty_before_training(self):
+        assert make_model().training_history() == {"loss": [], "lr": [], "val_loss": []}
+
+    def test_online_steps_are_not_recorded(self):
+        x, y = separable_data()
+        model = make_model()
+        model.compile(convergence=0.0)
+        model.train_on_batch(x, y)
+        model.end_online_training()
+        assert model.training_history()["loss"] == []
 
 
 class TestVerbose:

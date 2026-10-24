@@ -225,6 +225,8 @@ int ann_class_prediction(const real *outputs, int classes);
 int ann_export_pikchr(const PNetwork pnet, const char *filename);
 int ann_export_learning_curve(const PNetwork pnet, const char *filename);
 void ann_clear_history(PNetwork pnet);
+unsigned ann_get_history_count(const PNetwork pnet);
+unsigned ann_get_history(const PNetwork pnet, real *loss, real *lr, real *val_loss, unsigned max_count);
 
 // Debug and info
 void ann_print_props(const PNetwork pnet);

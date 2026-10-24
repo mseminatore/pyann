@@ -123,11 +123,13 @@ class TestEarlyStopping:
             *blobs(), input_size=2, output_size=2)
         for r in results:
             assert r.best_epoch is not None and r.best_epoch < 500
+            assert r.best_epoch <= r.epochs_trained < 500
 
     def test_disabled(self):
         _, results = RandomSearch(small_space(epochs=5), n_trials=1, options=quiet(early_stopping=False)).run(
             *blobs(), input_size=2, output_size=2)
         assert results[0].best_epoch is None
+        assert results[0].epochs_trained == 5
 
 
 class TestTopology:

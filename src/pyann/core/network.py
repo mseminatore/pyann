@@ -449,10 +449,12 @@ class Sequential:
             lr_scheduler: Learning rate scheduler
             
         Returns:
-            Dictionary with training history: ``epochs`` and ``loss`` (the
-            last epoch's training loss); with validation data, ``val_loss``
-            and ``val_accuracy`` for the final weights; with EarlyStopping,
-            ``best_epoch``
+            Dictionary with training history: ``epochs`` (the limit),
+            ``epochs_trained`` (fewer when early stopping or the convergence
+            threshold ended training) and ``loss`` (the last epoch's training
+            loss); with validation data, ``val_loss`` and ``val_accuracy`` for
+            the final weights; with EarlyStopping, ``best_epoch``. Per-epoch
+            values are in :meth:`training_history`.
         """
         self._build()
         self.end_online_training()
@@ -511,12 +513,17 @@ class Sequential:
         # Train (on the GPU when pyann.enable_gpu() succeeded)
         try:
             self._gpu_upload()
+            epochs_before = lib.ann_get_history_count(self._ptr)
             loss = lib.ann_train_network(self._ptr, x_tensor._ptr, y_tensor._ptr, n_samples)
             if loss == 0.0:
                 raise NetworkError("Training failed")
             
             # Build history dict (loss: the last epoch's average training loss)
-            history = {"epochs": epochs, "loss": loss}
+            history = {
+                "epochs": epochs,
+                "epochs_trained": lib.ann_get_history_count(self._ptr) - epochs_before,
+                "loss": loss,
+            }
             if stopping is not None:
                 history["best_epoch"] = lib.ann_get_best_epoch(self._ptr)
             
@@ -922,6 +929,29 @@ class Sequential:
         
         result = lib.ann_export_learning_curve(self._ptr, str(filepath).encode())
         raise_for_error_code(result, f"Failed to export learning curve to {filepath}")
+    
+    def training_history(self) -> dict:
+        """The loss and learning rate of every epoch trained by fit().
+        
+        Epochs accumulate across fit() calls until :meth:`clear_history`
+        (libann records at most 10,000). train_on_batch() steps are not
+        recorded.
+        
+        Returns:
+            Dictionary of equal-length lists, one entry per epoch: ``loss``
+            (training loss), ``lr`` (learning rate) and ``val_loss``
+            (validation loss, or None for epochs trained without
+            validation_data)
+        """
+        count = lib.ann_get_history_count(self._ptr) if self._built else 0
+        loss, lr, val_loss = (ffi.new("real[]", count) for _ in range(3))
+        if count:
+            count = lib.ann_get_history(self._ptr, loss, lr, val_loss, count)
+        return {
+            "loss": [float(loss[i]) for i in range(count)],
+            "lr": [float(lr[i]) for i in range(count)],
+            "val_loss": [float(val_loss[i]) if val_loss[i] >= 0.0 else None for i in range(count)],
+        }
     
     def clear_history(self) -> None:
         """Clear training history to free memory or before retraining."""

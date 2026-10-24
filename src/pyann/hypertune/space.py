@@ -166,6 +166,8 @@ class HypertuneResult:
             kept; None without it
         training_time: Seconds spent training the trial
         topology: The topology pattern that made layer_sizes
+        epochs_trained: Epochs the trial actually trained (fewer than
+            epochs when early stopping ended it)
     """
     learning_rate: float
     batch_size: int
@@ -182,6 +184,7 @@ class HypertuneResult:
     best_epoch: Optional[int] = None
     training_time: float = 0.0
     topology: str = "any"
+    epochs_trained: Optional[int] = None
     
     def to_dict(self) -> dict:
         """Convert to dictionary."""
@@ -201,6 +204,7 @@ class HypertuneResult:
             "best_epoch": self.best_epoch,
             "training_time": self.training_time,
             "topology": self.topology,
+            "epochs_trained": self.epochs_trained,
         }
 
 

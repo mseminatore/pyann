@@ -184,7 +184,8 @@ class BaseSearch:
             score=score,
             best_epoch=history.get("best_epoch"),
             training_time=training_time,
-            topology=config.get("topology", "any")
+            topology=config.get("topology", "any"),
+            epochs_trained=history["epochs_trained"]
         )
         
         return result
