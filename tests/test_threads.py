@@ -66,13 +66,4 @@ def test_results_do_not_depend_on_the_thread_count(tmp_path):
     # can match another
     if not np.array_equal(one, train(1)):
         pytest.skip("the BLAS library's results vary from run to run")
-    if pyann.backend_info()["blas"] == "accelerate":
-        # libann runs a conv layer's per-sample GEMMs through single-threaded
-        # Accelerate on its worker threads (macOS 15+), and those results
-        # depend on the thread; libann's own test_threads fails the same way
-        try:
-            np.testing.assert_array_equal(one, train(4))
-        except AssertionError:
-            pytest.xfail("Accelerate conv results depend on the thread count")
-        return
     np.testing.assert_array_equal(one, train(4))
