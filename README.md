@@ -232,12 +232,33 @@ from pyann.callbacks import EarlyStopping
 
 stopping = EarlyStopping(patience=10, min_delta=0.0001, restore_best=True)
 history = model.fit(X, y, epochs=500, validation_data=(X_val, y_val), callbacks=[stopping])
-print(history["best_epoch"], history["val_loss"])
+print(history["epochs_trained"], history["best_epoch"], history["val_loss"])
 ```
 
 libann measures the validation loss after every epoch and stops once it has not
 improved for `patience` epochs; with `restore_best=True` the model keeps the
 best epoch's weights. Without `validation_data` it monitors the training loss.
+
+### Training History
+
+`fit()` returns a summary: `epochs_trained`, the last epoch's `loss`, and, with
+validation data, `val_loss` and `val_accuracy` for the final weights.
+`training_history()` gives every epoch:
+
+```python
+model.fit(X, y, epochs=50, validation_data=(X_val, y_val))
+h = model.training_history()   # {"loss": [...], "lr": [...], "val_loss": [...]}
+
+import matplotlib.pyplot as plt
+plt.plot(h["loss"], label="train")
+plt.plot(h["val_loss"], label="validation")
+```
+
+- **Accumulation:** epochs accumulate across `fit()` calls until
+  `clear_history()`. libann records at most 10,000.
+- **Gaps:** `val_loss` is `None` for epochs trained without validation data.
+- **Online training:** `train_on_batch()` steps aren't recorded.
+- **CSV:** `export_learning_curve()` writes the same history to a CSV file.
 
 ### Online Training and Fine-Tuning
 
@@ -332,6 +353,7 @@ and keeps its best epoch's weights. Each result records:
 - `loss`: the last epoch's training loss
 - `score`: the value the search ranked by
 - `best_epoch`: the epoch whose weights were kept
+- `epochs_trained`: how many epochs the trial ran
 - `training_time`: in seconds
 
 `seed` makes the sampled configurations repeatable. It doesn't seed libann's
@@ -467,6 +489,7 @@ Methods:
 - `quantize(x_calibration)` - Make an int8 `QuantizedModel`
 - `export_c_header(filepath, prefix=None, runtime=True)` - Export float32 weights as a C header (and copy `ann_rt.h` next to it)
 - `export_pikchr(filepath)` - Export architecture as PIKCHR diagram
+- `training_history()` - Per-epoch `loss`, `lr` and `val_loss` lists from `fit()`
 - `export_learning_curve(filepath)` - Export training history as CSV (adds `val_loss` when `fit()` had validation data)
 - `clear_history()` - Clear training history to free memory
 - `set_weight_decay(lambda_)` - Set L2 regularization coefficient
