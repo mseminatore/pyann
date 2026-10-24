@@ -31,11 +31,11 @@ from example_data import CLASSES, as_images, load_fashion_mnist, one_hot, setup_
 def build_model() -> Sequential:
     model = Sequential([
         Input((1, 28, 28)),
-        Conv2D(8, 3, activation="relu"),        # -> (8, 26, 26)
-        MaxPool2D(2),                           # -> (8, 13, 13)
-        Conv2D(16, 3, activation="relu"),       # -> (16, 11, 11)
-        MaxPool2D(2),                           # -> (16, 5, 5)
-        Flatten(),                              # -> (400,)
+        Conv2D(filters=8, kernel_size=3, activation="relu"),   # -> (8, 26, 26)
+        MaxPool2D(pool_size=2),                                # -> (8, 13, 13)
+        Conv2D(filters=16, kernel_size=3, activation="relu"),  # -> (16, 11, 11)
+        MaxPool2D(pool_size=2),                                # -> (16, 5, 5)
+        Flatten(),                                             # -> (400,)
         Dense(64, activation="relu"),
         Dense(10, activation="softmax"),
     ], optimizer=Adam(lr=0.001), loss="cce")

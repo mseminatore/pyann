@@ -158,11 +158,11 @@ from pyann import Sequential, Input, Conv2D, MaxPool2D, Flatten, Dense
 # x: (N, 1, 28, 28) float32 images, y: (N, 10) one-hot labels
 model = Sequential([
     Input((1, 28, 28)),
-    Conv2D(8, 3, activation='relu'),                  # -> (8, 26, 26)
-    MaxPool2D(2),                                     # -> (8, 13, 13)
-    Conv2D(16, 3, activation='relu'),                 # -> (16, 11, 11)
-    MaxPool2D(2),                                     # -> (16, 5, 5)
-    Flatten(),                                        # -> (400,)
+    Conv2D(filters=8, kernel_size=3, activation='relu'),   # -> (8, 26, 26)
+    MaxPool2D(pool_size=2),                                # -> (8, 13, 13)
+    Conv2D(filters=16, kernel_size=3, activation='relu'),  # -> (16, 11, 11)
+    MaxPool2D(pool_size=2),                                # -> (16, 5, 5)
+    Flatten(),                                             # -> (400,)
     Dense(64, activation='relu'),
     Dense(10, activation='softmax'),
 ])
@@ -189,14 +189,14 @@ from pyann import Sequential, Input, Conv2D, MaxPool2D, UpSample2D
 
 model = Sequential([
     Input((1, 28, 28)),
-    Conv2D(16, 3, padding='same', activation='relu'),
-    MaxPool2D(2),                                       # -> (16, 14, 14)
-    Conv2D(8, 3, padding='same', activation='relu'),
-    MaxPool2D(2),                                       # -> (8, 7, 7)
-    UpSample2D(2),                                      # -> (8, 14, 14)
-    Conv2D(16, 3, padding='same', activation='relu'),
-    UpSample2D(2),                                      # -> (16, 28, 28)
-    Conv2D(1, 3, padding='same', activation='sigmoid'), # -> (1, 28, 28)
+    Conv2D(filters=16, kernel_size=3, padding='same', activation='relu'),    # -> (16, 28, 28)
+    MaxPool2D(pool_size=2),                                                  # -> (16, 14, 14)
+    Conv2D(filters=8, kernel_size=3, padding='same', activation='relu'),     # -> (8, 14, 14)
+    MaxPool2D(pool_size=2),                                                  # -> (8, 7, 7)
+    UpSample2D(size=2),                                                      # -> (8, 14, 14)
+    Conv2D(filters=16, kernel_size=3, padding='same', activation='relu'),    # -> (16, 14, 14)
+    UpSample2D(size=2),                                                      # -> (16, 28, 28)
+    Conv2D(filters=1, kernel_size=3, padding='same', activation='sigmoid'),  # -> (1, 28, 28)
 ])
 model.compile(optimizer='adam', loss='bce', learning_rate=0.002, convergence=0.0)
 model.set_input_noise('gaussian', 0.3, clip=(0, 1))     # or 'masking', 'salt_pepper'
@@ -541,14 +541,25 @@ model.compile(optimizer='adam', loss='mse', gradient_clip=5.0, weight_init='he',
 ### Layers
 
 ```python
-Dense(units, activation=None, input_shape=None, dropout=0.0)
-Input(shape)              # (features,) or (channels, height, width)
-Conv2D(filters, kernel_size=3, strides=1, padding=0, activation=None, input_shape=None, dropout=0.0)
-MaxPool2D(pool_size=2, strides=None)   # strides default to pool_size; alias MaxPooling2D
-Flatten()                 # optional: Dense layers read image outputs as vectors
-UpSample2D(size=2)        # nearest-neighbour: (C, H, W) -> (C, H*size, W*size); alias UpSampling2D
-Reshape(target_shape)     # same values as (channels, height, width), e.g. after a Dense layer
+Dense(units, activation=None, input_shape=None, dropout=0.0, name=None)
+Input(shape)                                     # (features,) or (channels, height, width)
+Conv2D(filters, kernel_size=3, strides=1, padding=0, activation=None, input_shape=None, dropout=0.0, name=None)
+MaxPool2D(pool_size=2, strides=None, name=None)  # strides default to pool_size; alias MaxPooling2D
+Flatten(name=None)                               # optional: Dense layers read image outputs as vectors
+UpSample2D(size=2, name=None)                    # nearest-neighbour: (C, H, W) -> (C, H*size, W*size); alias UpSampling2D
+Reshape(target_shape, name=None)                 # same values as (channels, height, width), e.g. after a Dense layer
 ```
+
+- `units`: number of neurons (outputs) in the layer.
+- `filters`: number of output channels, one learned kernel each.
+- `kernel_size`: kernel height and width (kernels are square).
+- `strides`: step between kernel or pooling windows.
+- `pool_size`: pooling window height and width. `MaxPool2D(pool_size=2)` halves
+  height and width (rounding down).
+- `size`: upsampling factor. Each value is repeated `size` times along height and width.
+- `target_shape`: `(channels, height, width)` to view the incoming values as.
+  Its product must equal the previous layer's output size.
+- `name`: optional label for the layer.
 
 `Conv2D` uses square kernels; `padding` is an int, `'valid'` (0) or `'same'`
 (keeps the size; odd kernel sizes with stride 1). Output size is

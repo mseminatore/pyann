@@ -60,9 +60,10 @@ int main(void)
 
 def build_model(cnn: bool) -> Sequential:
     if cnn:
-        layers = [Input((1, 28, 28)), Conv2D(8, 3, activation="relu"), MaxPool2D(2),
-                  Conv2D(16, 3, activation="relu"), MaxPool2D(2), Flatten(),
-                  Dense(64, activation="relu")]
+        layers = [Input((1, 28, 28)),
+                  Conv2D(filters=8, kernel_size=3, activation="relu"), MaxPool2D(pool_size=2),
+                  Conv2D(filters=16, kernel_size=3, activation="relu"), MaxPool2D(pool_size=2),
+                  Flatten(), Dense(64, activation="relu")]
     else:
         layers = [Input((784,)), Dense(128, activation="relu")]
     model = Sequential(layers + [Dense(10, activation="softmax")])

@@ -32,14 +32,14 @@ from example_data import CLASSES, as_images, load_fashion_mnist, setup_backend, 
 def build_model() -> Sequential:
     model = Sequential([
         Input((1, 28, 28)),
-        Conv2D(16, 3, padding="same", activation="relu"),      # -> (16, 28, 28)
-        MaxPool2D(2),                                          # -> (16, 14, 14)
-        Conv2D(8, 3, padding="same", activation="relu"),       # -> (8, 14, 14)
-        MaxPool2D(2),                                          # -> (8, 7, 7)
-        UpSample2D(2),                                         # -> (8, 14, 14)
-        Conv2D(16, 3, padding="same", activation="relu"),      # -> (16, 14, 14)
-        UpSample2D(2),                                         # -> (16, 28, 28)
-        Conv2D(1, 3, padding="same", activation="sigmoid"),    # -> (1, 28, 28)
+        Conv2D(filters=16, kernel_size=3, padding="same", activation="relu"),    # -> (16, 28, 28)
+        MaxPool2D(pool_size=2),                                                  # -> (16, 14, 14)
+        Conv2D(filters=8, kernel_size=3, padding="same", activation="relu"),     # -> (8, 14, 14)
+        MaxPool2D(pool_size=2),                                                  # -> (8, 7, 7)
+        UpSample2D(size=2),                                                      # -> (8, 14, 14)
+        Conv2D(filters=16, kernel_size=3, padding="same", activation="relu"),    # -> (16, 14, 14)
+        UpSample2D(size=2),                                                      # -> (16, 28, 28)
+        Conv2D(filters=1, kernel_size=3, padding="same", activation="sigmoid"),  # -> (1, 28, 28)
     ])
     model.compile(optimizer="adam", loss="bce", learning_rate=0.002, convergence=0.0)
     return model
