@@ -4,8 +4,9 @@ import ctypes
 import logging
 import os
 import sys
+import warnings
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 from cffi import FFI, FFIError
 
@@ -50,13 +51,34 @@ except MemoryError:
     _error_callback = None
 
 
-def _find_library() -> str:
+def _package_dirs() -> List[Path]:
+    """The pyann package's directories, in the order Python searches them.
+    
+    A wheel install has one. An editable install (pip install -e .) lists the
+    build it installed (with lib/) before the source tree, so the library it
+    just built wins over an older one left in src/pyann/lib.
+    """
+    package = sys.modules.get("pyann")
+    dirs = [Path(p) for p in getattr(package, "__path__", [])]
+    here = Path(__file__).resolve().parent.parent
+    if not any(d.resolve() == here for d in dirs):
+        dirs.append(here)
+    return dirs
+
+
+def _find_library(package_dirs: Optional[List[Path]] = None) -> str:
     """Find the libann shared library.
     
     Search order:
     1. PYANN_LIB_PATH environment variable
-    2. Next to this Python package
-    3. Common system locations
+    2. The pyann package's directories, in import order (see _package_dirs)
+    3. Common build and system locations
+    
+    Warns when the package's directories hold a newer libann than the one
+    found, which usually means a stale build is shadowing a fresh one.
+    
+    Args:
+        package_dirs: The package's directories (default: _package_dirs())
     
     Returns:
         Path to the shared library
@@ -72,6 +94,10 @@ def _find_library() -> str:
     else:  # Linux and others
         lib_names = ["libann.so"]
     
+    if package_dirs is None:
+        package_dirs = _package_dirs()
+    package_paths = [p for d in package_dirs for p in (d, d / "lib", d / "_lib")]
+    
     # Search paths
     search_paths = []
     
@@ -80,13 +106,11 @@ def _find_library() -> str:
     if env_path:
         search_paths.append(Path(env_path))
     
-    # 2. Next to this package
-    package_dir = Path(__file__).parent.parent
-    search_paths.append(package_dir)
-    search_paths.append(package_dir / "lib")
-    search_paths.append(package_dir / "_lib")
+    # 2. In the package
+    search_paths.extend(package_paths)
     
     # 3. Next to package in site-packages (for installed packages)
+    package_dir = Path(__file__).parent.parent
     search_paths.append(package_dir.parent)
     
     # 4. Common build locations (for development)
@@ -118,6 +142,8 @@ def _find_library() -> str:
         for lib_name in lib_names:
             lib_path = search_path / lib_name
             if lib_path.exists():
+                if not env_path:
+                    _warn_if_shadowed(lib_path, [p / n for p in package_paths for n in lib_names])
                 return str(lib_path)
     
     # Library not found
@@ -129,6 +155,23 @@ def _find_library() -> str:
         f"Set PYANN_LIB_PATH environment variable to the library location,\n"
         f"or build the library and place it in one of the search paths."
     )
+
+
+def _warn_if_shadowed(chosen: Path, candidates: List[Path]) -> None:
+    """Warn when a newer libann among candidates loses to the chosen one."""
+    chosen_real = chosen.resolve()
+    chosen_time = chosen_real.stat().st_mtime
+    for candidate in candidates:
+        if not candidate.exists() or candidate.resolve() == chosen_real:
+            continue
+        if candidate.resolve().stat().st_mtime > chosen_time:
+            warnings.warn(
+                f"pyann is loading libann from {chosen}, but {candidate} is newer and is "
+                f"ignored. Rebuild or delete the older one, or set PYANN_LIB_PATH to the "
+                f"directory of the one you want.",
+                RuntimeWarning, stacklevel=3,
+            )
+            return
 
 
 def _detect_backends(loaded_lib: object, lib_path: str) -> Dict[str, Optional[str]]:
