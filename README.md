@@ -5,7 +5,7 @@ Python wrapper for the [libann](https://github.com/mseminatore/ann) neural netwo
 ## Features
 
 - **Keras-style API**: Familiar `Sequential` model with `add()`, `fit()`, `predict()`
-- **Layers**: Dense, plus Conv2D, MaxPool2D and Flatten for convolutional networks, and UpSample2D and Reshape for decoders (autoencoders)
+- **Layers**: Dense, plus Conv2D, MaxPool2D, GlobalAveragePooling2D, BatchNormalization and Flatten for convolutional networks, and UpSample2D and Reshape for decoders (autoencoders)
 - **Input noise** for denoising autoencoders: Gaussian, masking or salt-and-pepper
 - **Multiple optimizers**: SGD, Momentum, RMSProp, AdaGrad, Adam
 - **Activation functions**: Sigmoid, ReLU, LeakyReLU, Tanh, Softsign, Softmax, GELU
@@ -176,6 +176,40 @@ On Fashion-MNIST this network reaches about 90% test accuracy. `predict()`,
 flattened rows. With `enable_gpu()`, convolutional networks run on the GPU
 with Metal or Vulkan; the CUDA backend is dense-only, so with CUDA they train on
 the CPU (BLAS-accelerated).
+
+### Batch Normalization and Global Average Pooling
+
+`BatchNormalization` normalizes each channel (each unit after a `Dense`
+layer) over the batch, then scales and shifts it by learned parameters, so
+deeper networks train faster and accept higher learning rates. It goes
+between a layer and its activation: give the layer before no activation and
+the batch norm layer the activation. `GlobalAveragePooling2D` turns each
+channel into its mean, replacing `Flatten` + a large `Dense` layer at the end
+of a CNN with far fewer parameters:
+
+```python
+from pyann import Sequential, Input, Conv2D, BatchNormalization, MaxPool2D, GlobalAveragePooling2D, Dense
+
+model = Sequential([
+    Input((1, 28, 28)),
+    Conv2D(16, 3, padding='same'),               # no activation here...
+    BatchNormalization(activation='relu'),       # ...it comes after normalizing
+    MaxPool2D(2),                                # -> (16, 14, 14)
+    Conv2D(32, 3, padding='same'),
+    BatchNormalization(activation='relu'),
+    GlobalAveragePooling2D(),                    # -> (32,)
+    Dense(10, activation='softmax'),
+])
+```
+
+Training uses each batch's mean and variance (train with batches of more
+than one sample) and keeps running averages of them (momentum 0.1, as in
+PyTorch), which `predict()` and `evaluate()` use; they are saved with the
+model and exported to ONNX as `BatchNormalization`. A layer's bias before a
+batch norm is redundant, since the batch norm subtracts the mean.
+`quantize()` and C export fold each batch norm into the `Dense` or `Conv2D`
+layer before it, which must have no activation. Both layers run on the GPU
+with Metal or Vulkan.
 
 ### Autoencoders and Denoising
 

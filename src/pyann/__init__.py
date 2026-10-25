@@ -15,7 +15,10 @@ except PackageNotFoundError:  # running from a source tree that was never instal
 
 from pyann.core.network import Sequential
 from pyann.core.quantized import QuantizedModel, runtime_header_path
-from pyann.core.layers import Dense, Input, Conv2D, MaxPool2D, MaxPooling2D, Flatten, UpSample2D, UpSampling2D, Reshape
+from pyann.core.layers import (
+    Dense, Input, Conv2D, MaxPool2D, MaxPooling2D, Flatten, UpSample2D, UpSampling2D, Reshape,
+    GlobalAveragePooling2D, GlobalAvgPool2D, BatchNormalization, BatchNorm,
+)
 from pyann.optimizers import Optimizer, SGD, Momentum, RMSProp, AdaGrad, Adam
 from pyann.losses import Loss
 from pyann.activations import Activation
@@ -41,6 +44,10 @@ __all__ = [
     "UpSample2D",
     "UpSampling2D",
     "Reshape",
+    "GlobalAveragePooling2D",
+    "GlobalAvgPool2D",
+    "BatchNormalization",
+    "BatchNorm",
     "Optimizer",
     "SGD",
     "Momentum",

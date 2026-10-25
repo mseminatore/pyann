@@ -21,7 +21,9 @@ typedef enum {
     LAYER_KIND_MAXPOOL2D,
     LAYER_KIND_FLATTEN,
     LAYER_KIND_UPSAMPLE2D,
-    LAYER_KIND_RESHAPE
+    LAYER_KIND_RESHAPE,
+    LAYER_KIND_GLOBAL_AVGPOOL2D,
+    LAYER_KIND_BATCHNORM
 } Layer_kind;
 
 // Activation types
@@ -134,6 +136,8 @@ int ann_add_maxpool2d(PNetwork pnet, int pool_size, int stride);
 int ann_add_flatten(PNetwork pnet);
 int ann_add_upsample2d(PNetwork pnet, int scale);
 int ann_add_reshape(PNetwork pnet, int channels, int height, int width);
+int ann_add_global_avgpool2d(PNetwork pnet);
+int ann_add_batchnorm(PNetwork pnet, Activation_type activation);
 void ann_free_network(PNetwork pnet);
 
 // Data loading
@@ -226,6 +230,7 @@ int ann_export_pikchr(const PNetwork pnet, const char *filename);
 int ann_export_learning_curve(const PNetwork pnet, const char *filename);
 void ann_clear_history(PNetwork pnet);
 unsigned ann_get_history_count(const PNetwork pnet);
+unsigned ann_get_epochs_trained(const PNetwork pnet);
 unsigned ann_get_history(const PNetwork pnet, real *loss, real *lr, real *val_loss, unsigned max_count);
 
 // Debug and info
