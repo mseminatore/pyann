@@ -76,6 +76,12 @@ class TestStandaloneExamples:
         out = run_example("regression_activations.py", "-e", "20", cwd=tmp_path)
         assert "gelu" in out
 
+    def test_activity_recognition(self, tmp_path):
+        out = run_example("activity_recognition.py", "-e", "2", "--samples", "20", cwd=tmp_path)
+        assert "ONNX round trip predicts the same: yes" in out
+        assert (tmp_path / "activity_deploy" / "activity_q.h").exists()
+        assert (tmp_path / "activity_deploy" / "ann_rt.h").exists()
+
     def test_online_learning(self, tmp_path):
         out = run_example("online_learning.py", "--batches", "40", cwd=tmp_path)
         assert "saved and reloaded" in out

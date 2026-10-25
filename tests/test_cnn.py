@@ -53,7 +53,7 @@ class TestLayerSettings:
 
     @pytest.mark.parametrize("kwargs", [
         dict(filters=0),
-        dict(filters=4, kernel_size=(3, 5)),
+        dict(filters=4, kernel_size=(3, 5, 1)),
         dict(filters=4, kernel_size=0),
         dict(filters=4, strides=0),
         dict(filters=4, padding=-1),

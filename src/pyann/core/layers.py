@@ -116,36 +116,108 @@ def parse_layer(layer_spec: Union[Layer, int, Tuple[int, str]]) -> Layer:
     raise TypeError(f"Cannot parse layer specification: {layer_spec}")
 
 
-def _pair(value, name: str) -> int:
-    """A square window setting: an int, or a 2-tuple of equal ints."""
+def _axes(value, name: str) -> Tuple[int, int]:
+    """A window setting for (height, width): an int for both, or a pair."""
     if isinstance(value, (tuple, list)):
-        if len(value) != 2 or value[0] != value[1]:
-            raise ValueError(f"{name} must be an int or a pair of equal ints, got {value}")
-        value = value[0]
-    if not isinstance(value, int) or isinstance(value, bool):
-        raise TypeError(f"{name} must be an int, got {type(value).__name__}")
-    return value
+        if len(value) != 2:
+            raise ValueError(f"{name} must be an int or a (height, width) pair, got {value}")
+        h, w = value
+    else:
+        h = w = value
+    for v in (h, w):
+        if not isinstance(v, int) or isinstance(v, bool):
+            raise TypeError(f"{name} must be an int or a pair of ints, got {value!r}")
+    return h, w
+
+
+def _compact(pair: Tuple[int, int]) -> Union[int, Tuple[int, int]]:
+    """An int when both axes agree, else the (height, width) pair."""
+    return pair[0] if pair[0] == pair[1] else tuple(pair)
+
+
+def _window_size(n: int, kernel: int, stride: int, padding: int) -> int:
+    return (n + 2 * padding - kernel) // stride + 1
+
+
+def _conv_padding(padding, kernel: Tuple[int, int], strides: Tuple[int, int]) -> Tuple[int, int]:
+    """'valid' (0), 'same' (keeps the size: odd kernels and strides of 1), an int, or a pair."""
+    if padding == "valid":
+        return (0, 0)
+    if padding == "same":
+        if kernel[0] % 2 == 0 or kernel[1] % 2 == 0 or strides != (1, 1):
+            raise ValueError("padding='same' needs odd kernel sizes and strides of 1; give an int padding instead")
+        return ((kernel[0] - 1) // 2, (kernel[1] - 1) // 2)
+    if isinstance(padding, str):
+        raise ValueError(f"padding must be 'valid', 'same', an int or a pair, got {padding!r}")
+    pads = _axes(padding, "padding")
+    if min(pads) < 0:
+        raise ValueError(f"padding must be >= 0, got {padding!r}")
+    return pads
+
+
+class _ConvBase(Layer):
+    """What Sequential needs from a convolution layer: its window
+    (kernel_h, kernel_w, stride_h, stride_w, padding_h, padding_w), and its
+    filters and groups for an input of a given number of channels."""
+
+    def window(self) -> Tuple[int, int, int, int, int, int]:
+        raise NotImplementedError
+
+    def output_filters(self, in_channels: int) -> int:
+        return self.filters
+
+    def conv_groups(self, in_channels: int) -> int:
+        return self.groups
+
+    @property
+    def activation_type(self) -> Activation:
+        """Get the Activation enum value."""
+        return self._activation_enum
+
+    def _check_common(self):
+        if not 0.0 <= self.dropout < 1.0:
+            raise ValueError(f"dropout must be in [0, 1), got {self.dropout}")
+        self._activation_enum = parse_activation(self.activation)
+        if self._activation_enum == Activation.SOFTMAX:
+            raise ValueError(f"softmax is not supported on {type(self).__name__} layers")
+
+    def output_shape(self, input_shape: Tuple[int, int, int]) -> Tuple[int, int, int]:
+        """Output (channels, height, width) for an input of the given shape."""
+        c, h, w = input_shape
+        kh, kw, sh, sw, ph, pw = self.window()
+        return (self.output_filters(c), _window_size(h, kh, sh, ph), _window_size(w, kw, sw, pw))
+
+    def param_count(self, in_channels: int) -> int:
+        kh, kw = self.window()[:2]
+        filters, groups = self.output_filters(in_channels), self.conv_groups(in_channels)
+        return filters * (in_channels // groups * kh * kw + 1)
 
 
 @dataclass
-class Conv2D(Layer):
-    """2-D convolution layer with square kernels.
+class Conv2D(_ConvBase):
+    """2-D convolution layer.
     
     Inputs and outputs are channels-first: (channels, height, width). The
     output has ``filters`` channels and height
-    ``(height + 2 * padding - kernel_size) // strides + 1`` (likewise width).
+    ``(height + 2 * padding - kernel_size) // strides + 1`` (likewise width,
+    with its own settings when they are pairs).
     
     Args:
         filters: Number of output channels
-        kernel_size: Kernel height and width (int, or a pair of equal ints)
-        strides: Step between windows (int, or a pair of equal ints)
-        padding: Zeros added on each side: an int, 'valid' (0), or 'same'
-            ((kernel_size - 1) // 2, which keeps the size; needs an odd
-            kernel_size and strides of 1)
+        kernel_size: Kernel size: an int, or a (height, width) pair
+        strides: Step between windows: an int, or a (height, width) pair
+        padding: Zeros added on each side: an int or a (height, width) pair,
+            'valid' (0), or 'same' ((kernel_size - 1) // 2 per axis, which keeps
+            the size; needs odd kernel sizes and strides of 1)
+        groups: Split the input channels and the filters into this many
+            groups, each group's filters seeing only its channels (both must
+            be divisible by it); groups = channels is a depthwise conv
         activation: Activation function (not softmax)
         input_shape: (channels, height, width), only for the first layer
         dropout: Dropout rate for this layer (0.0 = disabled)
         name: Optional layer name
+        
+    Square settings read back as ints, non-square ones as (height, width) pairs.
         
     Example:
         >>> Conv2D(16, 3, padding='same', activation='relu', input_shape=(1, 28, 28))
@@ -153,54 +225,163 @@ class Conv2D(Layer):
     filters: int
     kernel_size: Union[int, Tuple[int, int]] = 3
     strides: Union[int, Tuple[int, int]] = 1
+    padding: Union[int, str, Tuple[int, int]] = 0
+    activation: Union[str, Activation, None] = None
+    input_shape: Optional[Tuple[int, ...]] = None
+    dropout: float = 0.0
+    name: Optional[str] = None
+    groups: int = 1
+
+    def __post_init__(self):
+        if not isinstance(self.filters, int) or self.filters <= 0:
+            raise ValueError(f"filters must be a positive int, got {self.filters}")
+        if not isinstance(self.groups, int) or isinstance(self.groups, bool) or self.groups <= 0:
+            raise ValueError(f"groups must be a positive int, got {self.groups}")
+        if self.filters % self.groups:
+            raise ValueError(f"filters ({self.filters}) must be a multiple of groups ({self.groups})")
+        kernel, strides = _axes(self.kernel_size, "kernel_size"), _axes(self.strides, "strides")
+        if min(kernel) <= 0 or min(strides) <= 0:
+            raise ValueError("kernel_size and strides must be positive")
+        pads = _conv_padding(self.padding, kernel, strides)
+        self.kernel_size, self.strides, self.padding = _compact(kernel), _compact(strides), _compact(pads)
+        self._window = kernel + strides + pads
+        self._check_common()
+
+    def window(self) -> Tuple[int, int, int, int, int, int]:
+        kh, kw, sh, sw, ph, pw = self._window
+        return (kh, kw, sh, sw, ph, pw)
+
+
+@dataclass
+class DepthwiseConv2D(_ConvBase):
+    """Depthwise 2-D convolution: each input channel convolved with its own
+    ``depth_multiplier`` filters, without mixing channels.
+    
+    The first half of a depthwise separable convolution (MobileNet): follow
+    it with a 1x1 Conv2D to mix the channels, usually with
+    BatchNormalization and an activation after each. Output channels are
+    ``channels * depth_multiplier``. A Conv2D with groups = channels.
+    
+    Args:
+        kernel_size: Kernel size: an int, or a (height, width) pair
+        strides: Step between windows: an int, or a (height, width) pair
+        padding: As for Conv2D: an int, a pair, 'valid' or 'same'
+        depth_multiplier: Filters per input channel
+        activation: Activation function (not softmax)
+        dropout: Dropout rate for this layer (0.0 = disabled)
+        name: Optional layer name
+    """
+    kernel_size: Union[int, Tuple[int, int]] = 3
+    strides: Union[int, Tuple[int, int]] = 1
+    padding: Union[int, str, Tuple[int, int]] = 0
+    depth_multiplier: int = 1
+    activation: Union[str, Activation, None] = None
+    dropout: float = 0.0
+    name: Optional[str] = None
+
+    def __post_init__(self):
+        if not isinstance(self.depth_multiplier, int) or isinstance(self.depth_multiplier, bool) or \
+                self.depth_multiplier <= 0:
+            raise ValueError(f"depth_multiplier must be a positive int, got {self.depth_multiplier}")
+        kernel, strides = _axes(self.kernel_size, "kernel_size"), _axes(self.strides, "strides")
+        if min(kernel) <= 0 or min(strides) <= 0:
+            raise ValueError("kernel_size and strides must be positive")
+        pads = _conv_padding(self.padding, kernel, strides)
+        self.kernel_size, self.strides, self.padding = _compact(kernel), _compact(strides), _compact(pads)
+        self._window = kernel + strides + pads
+        self._check_common()
+
+    def window(self) -> Tuple[int, int, int, int, int, int]:
+        kh, kw, sh, sw, ph, pw = self._window
+        return (kh, kw, sh, sw, ph, pw)
+
+    def output_filters(self, in_channels: int) -> int:
+        return in_channels * self.depth_multiplier
+
+    def conv_groups(self, in_channels: int) -> int:
+        return in_channels
+
+
+@dataclass
+class Conv1D(_ConvBase):
+    """1-D convolution over sequences, such as time series.
+    
+    A sequence of L steps with C features (channels) per step is the sample
+    shape (C, L), channels-first as in PyTorch's nn.Conv1d (a batch is
+    (N, C, L)); give input_shape=(C, L). The layer slides a window of
+    kernel_size steps along it; the output is (filters, L_out) with
+    ``L_out = (L + 2 * padding - kernel_size) // strides + 1``.
+    
+    Args:
+        filters: Number of output channels
+        kernel_size: Window length in steps
+        strides: Step between windows
+        padding: Zeros added at each end: an int, 'valid' (0), or 'same'
+            ((kernel_size - 1) // 2; needs an odd kernel_size and strides of 1)
+        groups: Split the channels and filters into groups, as in Conv2D
+        activation: Activation function (not softmax)
+        input_shape: (channels, steps), only for the first layer
+        dropout: Dropout rate for this layer (0.0 = disabled)
+        name: Optional layer name
+        
+    Example:
+        >>> Conv1D(16, 5, padding='same', activation='relu', input_shape=(3, 128))
+    """
+    filters: int
+    kernel_size: int = 3
+    strides: int = 1
     padding: Union[int, str] = 0
     activation: Union[str, Activation, None] = None
     input_shape: Optional[Tuple[int, ...]] = None
     dropout: float = 0.0
     name: Optional[str] = None
+    groups: int = 1
 
     def __post_init__(self):
         if not isinstance(self.filters, int) or self.filters <= 0:
             raise ValueError(f"filters must be a positive int, got {self.filters}")
-        self.kernel_size = _pair(self.kernel_size, "kernel_size")
-        self.strides = _pair(self.strides, "strides")
-        if self.kernel_size <= 0 or self.strides <= 0:
-            raise ValueError("kernel_size and strides must be positive")
-        if self.padding == "valid":
-            self.padding = 0
-        elif self.padding == "same":
-            if self.kernel_size % 2 == 0 or self.strides != 1:
-                raise ValueError("padding='same' needs an odd kernel_size and strides=1; give an int padding instead")
-            self.padding = (self.kernel_size - 1) // 2
-        elif not isinstance(self.padding, int) or isinstance(self.padding, bool) or self.padding < 0:
-            raise ValueError(f"padding must be 'valid', 'same' or an int >= 0, got {self.padding!r}")
-        if not 0.0 <= self.dropout < 1.0:
-            raise ValueError(f"dropout must be in [0, 1), got {self.dropout}")
-        self._activation_enum = parse_activation(self.activation)
-        if self._activation_enum == Activation.SOFTMAX:
-            raise ValueError("softmax is not supported on Conv2D layers")
+        if not isinstance(self.groups, int) or isinstance(self.groups, bool) or self.groups <= 0:
+            raise ValueError(f"groups must be a positive int, got {self.groups}")
+        if self.filters % self.groups:
+            raise ValueError(f"filters ({self.filters}) must be a multiple of groups ({self.groups})")
+        for name, v in (("kernel_size", self.kernel_size), ("strides", self.strides)):
+            if not isinstance(v, int) or isinstance(v, bool):
+                raise TypeError(f"{name} must be an int, got {v!r}")
+            if v <= 0:
+                raise ValueError(f"{name} must be positive, got {v}")
+        if isinstance(self.padding, (tuple, list)):
+            raise TypeError("padding must be an int, 'valid' or 'same'")
+        self.padding = _conv_padding(self.padding, (1, self.kernel_size), (1, self.strides))[1]
+        self._check_common()
 
-    @property
-    def activation_type(self) -> Activation:
-        """Get the Activation enum value."""
-        return self._activation_enum
+    def window(self) -> Tuple[int, int, int, int, int, int]:
+        return (1, self.kernel_size, 1, self.strides, 0, self.padding)
+
+
+class _PoolBase(Layer):
+    """What Sequential needs from a max pooling layer: its window
+    (pool_h, pool_w, stride_h, stride_w)."""
+
+    def window(self) -> Tuple[int, int, int, int]:
+        raise NotImplementedError
 
     def output_shape(self, input_shape: Tuple[int, int, int]) -> Tuple[int, int, int]:
         """Output (channels, height, width) for an input of the given shape."""
-        _, h, w = input_shape
-        size = lambda n: (n + 2 * self.padding - self.kernel_size) // self.strides + 1
-        return (self.filters, size(h), size(w))
+        c, h, w = input_shape
+        kh, kw, sh, sw = self.window()
+        return (c, _window_size(h, kh, sh, 0), _window_size(w, kw, sw, 0))
 
 
 @dataclass
-class MaxPool2D(Layer):
+class MaxPool2D(_PoolBase):
     """2-D max pooling layer (no padding), applied to each channel.
     
-    Output height is ``(height - pool_size) // strides + 1`` (likewise width).
+    Output height is ``(height - pool_size) // strides + 1`` (likewise width,
+    with its own settings when they are pairs).
     
     Args:
-        pool_size: Window height and width (int, or a pair of equal ints)
-        strides: Step between windows; defaults to pool_size
+        pool_size: Window size: an int, or a (height, width) pair
+        strides: Step between windows (an int or a pair); defaults to pool_size
         name: Optional layer name
     """
     pool_size: Union[int, Tuple[int, int]] = 2
@@ -208,16 +389,46 @@ class MaxPool2D(Layer):
     name: Optional[str] = None
 
     def __post_init__(self):
-        self.pool_size = _pair(self.pool_size, "pool_size")
-        self.strides = self.pool_size if self.strides is None else _pair(self.strides, "strides")
-        if self.pool_size <= 0 or self.strides <= 0:
+        size = _axes(self.pool_size, "pool_size")
+        strides = size if self.strides is None else _axes(self.strides, "strides")
+        if min(size) <= 0 or min(strides) <= 0:
             raise ValueError("pool_size and strides must be positive")
+        self.pool_size, self.strides = _compact(size), _compact(strides)
+        self._window = size + strides
 
-    def output_shape(self, input_shape: Tuple[int, int, int]) -> Tuple[int, int, int]:
-        """Output (channels, height, width) for an input of the given shape."""
-        c, h, w = input_shape
-        size = lambda n: (n - self.pool_size) // self.strides + 1
-        return (c, size(h), size(w))
+    def window(self) -> Tuple[int, int, int, int]:
+        kh, kw, sh, sw = self._window
+        return (kh, kw, sh, sw)
+
+
+@dataclass
+class MaxPool1D(_PoolBase):
+    """1-D max pooling over sequences (channels, steps), applied to each channel.
+    
+    Args:
+        pool_size: Window length in steps
+        strides: Step between windows; defaults to pool_size
+        name: Optional layer name
+    """
+    pool_size: int = 2
+    strides: Optional[int] = None
+    name: Optional[str] = None
+
+    def __post_init__(self):
+        if self.strides is None:
+            self.strides = self.pool_size
+        for name, v in (("pool_size", self.pool_size), ("strides", self.strides)):
+            if not isinstance(v, int) or isinstance(v, bool):
+                raise TypeError(f"{name} must be an int, got {v!r}")
+            if v <= 0:
+                raise ValueError(f"{name} must be positive, got {v}")
+
+    def window(self) -> Tuple[int, int, int, int]:
+        return (1, self.pool_size, 1, self.strides)
+
+
+#: Keras-style alias
+MaxPooling1D = MaxPool1D
 
 
 #: Keras-style alias
@@ -251,7 +462,10 @@ class UpSample2D(Layer):
     name: Optional[str] = None
 
     def __post_init__(self):
-        self.size = _pair(self.size, "size")
+        size = _axes(self.size, "size")
+        if size[0] != size[1]:
+            raise ValueError(f"size must be an int or a pair of equal ints, got {self.size}")
+        self.size = size[0]
         if self.size <= 0:
             raise ValueError(f"size must be positive, got {self.size}")
 

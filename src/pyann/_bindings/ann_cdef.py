@@ -132,7 +132,13 @@ PNetwork ann_make_network(Optimizer_type opt, Loss_type loss_type);
 int ann_add_layer(PNetwork pnet, int node_count, Layer_type layer_type, Activation_type activation_type);
 int ann_add_input(PNetwork pnet, int channels, int height, int width);
 int ann_add_conv2d(PNetwork pnet, int filters, int kernel_size, int stride, int padding, Activation_type activation);
+int ann_add_conv2d_grouped(PNetwork pnet, int filters, int kernel_size, int stride, int padding, int groups, Activation_type activation);
+int ann_add_depthwise_conv2d(PNetwork pnet, int depth_multiplier, int kernel_size, int stride, int padding, Activation_type activation);
+int ann_add_conv2d_ex(PNetwork pnet, int filters, int kernel_h, int kernel_w, int stride_h, int stride_w, int padding_h, int padding_w, int groups, Activation_type activation);
+int ann_add_conv1d(PNetwork pnet, int filters, int kernel_size, int stride, int padding, Activation_type activation);
 int ann_add_maxpool2d(PNetwork pnet, int pool_size, int stride);
+int ann_add_maxpool2d_ex(PNetwork pnet, int pool_h, int pool_w, int stride_h, int stride_w);
+int ann_add_maxpool1d(PNetwork pnet, int pool_size, int stride);
 int ann_add_flatten(PNetwork pnet);
 int ann_add_upsample2d(PNetwork pnet, int scale);
 int ann_add_reshape(PNetwork pnet, int channels, int height, int width);
@@ -219,6 +225,8 @@ Activation_type ann_get_layer_activation(const PNetwork pnet, int layer_index);
 Layer_kind ann_get_layer_kind(const PNetwork pnet, int layer_index);
 int ann_get_layer_shape(const PNetwork pnet, int layer_index, int *channels, int *height, int *width);
 int ann_get_layer_settings(const PNetwork pnet, int layer_index, int *size, int *stride, int *padding);
+int ann_get_layer_window(const PNetwork pnet, int layer, int *kernel_h, int *kernel_w, int *stride_h, int *stride_w, int *padding_h, int *padding_w);
+int ann_get_layer_groups(const PNetwork pnet, int layer);
 
 // Confusion matrix
 real ann_confusion_matrix(PNetwork pnet, PTensor inputs, PTensor outputs, int *tp, int *fp, int *tn, int *fn);
