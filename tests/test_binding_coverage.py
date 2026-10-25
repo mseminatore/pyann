@@ -218,3 +218,21 @@ class TestUsage:
         called, declared = called_functions(), set(cdef_functions())
         stale = sorted(n for n in UNUSED if n in called or n not in declared)
         assert not stale, f"UNUSED lists functions that are now used or no longer declared: {stale}"
+
+
+def _vulkan_shaders(cmake_file: Path) -> list:
+    """The VULKAN_SHADERS list in a CMakeLists.txt."""
+    match = re.search(r"set\(VULKAN_SHADERS\s+([^)]*)\)", cmake_file.read_text())
+    assert match, f"no VULKAN_SHADERS list in {cmake_file}"
+    return match.group(1).split()
+
+
+class TestVulkanShaders:
+    def test_shader_list_matches_libann(self):
+        # pyann compiles libann's shaders itself; a shader libann added but this
+        # list lacks leaves its spv_<name> array undefined and the build fails to link
+        ours = _vulkan_shaders(ANN_DIR.parent / "CMakeLists.txt")
+        theirs = _vulkan_shaders(ANN_DIR / "CMakeLists.txt")
+        files = sorted(p.stem for p in (ANN_DIR / "shaders" / "vk").glob("*.comp"))
+        assert sorted(ours) == sorted(theirs), "update VULKAN_SHADERS in pyann's CMakeLists.txt"
+        assert sorted(ours) == files

@@ -266,6 +266,70 @@ UpSampling2D = UpSample2D
 
 
 @dataclass
+class GlobalAveragePooling2D(Layer):
+    """Global average pooling: each channel's mean over height and width.
+    
+    The output is a vector of one value per channel, so a Dense layer can
+    follow directly. Used in place of Flatten + a large Dense layer at the
+    end of a CNN, it removes most of the parameters, which keeps quantized
+    and exported models small. Maps to an ONNX GlobalAveragePool node.
+    
+    Args:
+        name: Optional layer name
+    """
+    name: Optional[str] = None
+
+    def output_shape(self, input_shape: Tuple[int, int, int]) -> Tuple[int]:
+        """Output (channels,) for an input of the given shape."""
+        return (input_shape[0],)
+
+
+#: Short alias
+GlobalAvgPool2D = GlobalAveragePooling2D
+
+
+@dataclass
+class BatchNormalization(Layer):
+    """Batch normalization, then an optional activation.
+    
+    Normalizes each channel (each unit after a Dense layer) to zero mean and
+    unit variance, then scales and shifts it by a learned gamma and beta:
+    ``activation(gamma * (x - mean) / sqrt(var + 1e-5) + beta)``. Training
+    uses each batch's mean and variance (so train with batches of more than
+    one sample) and keeps running averages of them (momentum 0.1, as
+    PyTorch's default), which ``predict()`` and evaluation use. The output
+    has the input's shape.
+    
+    Put it between a layer and its activation, so the layer before has
+    none; that layer's bias is then redundant. Quantization and C export fold
+    it into that Dense or Conv2D layer. Maps to an ONNX BatchNormalization
+    node.
+    
+    Args:
+        activation: Activation applied after normalizing (default none)
+        name: Optional layer name
+        
+    Example:
+        >>> Conv2D(16, 3, padding='same')            # no activation here...
+        >>> BatchNormalization(activation='relu')    # ...it comes after normalizing
+    """
+    activation: Union[str, Activation, None] = None
+    name: Optional[str] = None
+
+    def __post_init__(self):
+        self._activation_enum = parse_activation(self.activation)
+
+    @property
+    def activation_type(self) -> Activation:
+        """Get the Activation enum value."""
+        return self._activation_enum
+
+
+#: Short alias
+BatchNorm = BatchNormalization
+
+
+@dataclass
 class Reshape(Layer):
     """Give the previous layer's values the shape (channels, height, width).
     

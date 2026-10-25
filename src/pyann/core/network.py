@@ -4,7 +4,10 @@ from typing import Optional, Union, List, Tuple, TYPE_CHECKING
 from pathlib import Path
 
 from pyann._bindings.ffi import ffi, lib, gpu_enabled
-from pyann.core.layers import Layer, Dense, Input, Conv2D, MaxPool2D, Flatten, UpSample2D, Reshape, parse_layer
+from pyann.core.layers import (
+    Layer, Dense, Input, Conv2D, MaxPool2D, Flatten, UpSample2D, Reshape,
+    GlobalAveragePooling2D, BatchNormalization, parse_layer,
+)
 from pyann.core.tensor import Tensor
 from pyann.activations import Activation
 from pyann.losses import Loss, parse_loss
@@ -98,6 +101,10 @@ def as_images(rows: ArrayLike, output_shape: Optional[Tuple[int, ...]]) -> Array
         return rows.reshape((len(rows),) + tuple(output_shape))
     c, h, w = output_shape
     return [[[row[(k * h + i) * w:(k * h + i + 1) * w] for i in range(h)] for k in range(c)] for row in rows]
+
+
+# layers that need an image (channels, height, width) input
+_IMAGE_LAYERS = (Conv2D, MaxPool2D, UpSample2D, GlobalAveragePooling2D)
 
 
 def _prod(shape) -> int:
@@ -312,6 +319,10 @@ class Sequential:
                     result = lib.ann_add_upsample2d(self._ptr, layer.size)
                 elif isinstance(layer, Reshape):
                     result = lib.ann_add_reshape(self._ptr, *layer.target_shape)
+                elif isinstance(layer, GlobalAveragePooling2D):
+                    result = lib.ann_add_global_avgpool2d(self._ptr)
+                elif isinstance(layer, BatchNormalization):
+                    result = lib.ann_add_batchnorm(self._ptr, layer.activation_type)
                 else:
                     raise InvalidParameterError(f"Unsupported layer type {type(layer).__name__}")
                 raise_for_error_code(result, f"Failed to add layer {i} ({type(layer).__name__})")
@@ -329,12 +340,13 @@ class Sequential:
         self._built = True
     
     def _uses_images(self) -> bool:
-        """Whether the input must be an image: a Conv2D, MaxPool2D or UpSample2D
-        layer reads it before any Reshape makes an image of its own."""
+        """Whether the input must be an image: a Conv2D, MaxPool2D, UpSample2D
+        or GlobalAveragePooling2D layer reads it before any Reshape makes an
+        image of its own."""
         for layer in self._layers:
             if isinstance(layer, Reshape):
                 return False
-            if isinstance(layer, (Conv2D, MaxPool2D, UpSample2D)):
+            if isinstance(layer, _IMAGE_LAYERS):
                 return True
         return False
 
@@ -359,7 +371,8 @@ class Sequential:
         """
         image = self._image_input_shape()
         if self._uses_images() and image is None:
-            raise NetworkError("Conv2D, MaxPool2D and UpSample2D need an image input_shape: (channels, height, width)")
+            raise NetworkError("Conv2D, MaxPool2D, UpSample2D and GlobalAveragePooling2D need an image "
+                               "input_shape: (channels, height, width)")
         shape = image if image is not None else (_prod(self._input_shape),)
         
         result = []
@@ -374,7 +387,11 @@ class Sequential:
                                        f"values, but the layer before outputs {_prod(shape)}")
                 new_shape = layer.target_shape
                 params = 0
-            elif isinstance(layer, (Conv2D, MaxPool2D, UpSample2D)):
+            elif isinstance(layer, BatchNormalization):
+                # gamma and beta, plus the running mean and variance, per channel
+                new_shape = shape
+                params = 4 * shape[0]
+            elif isinstance(layer, _IMAGE_LAYERS):
                 if len(shape) != 3:
                     raise NetworkError(f"Layer {i} ({name}) needs an image input, but the layer before outputs {shape}")
                 new_shape = layer.output_shape(shape)
@@ -513,7 +530,6 @@ class Sequential:
         # Train (on the GPU when pyann.enable_gpu() succeeded)
         try:
             self._gpu_upload()
-            epochs_before = lib.ann_get_history_count(self._ptr)
             loss = lib.ann_train_network(self._ptr, x_tensor._ptr, y_tensor._ptr, n_samples)
             if loss == 0.0:
                 raise NetworkError("Training failed")
@@ -521,7 +537,7 @@ class Sequential:
             # Build history dict (loss: the last epoch's average training loss)
             history = {
                 "epochs": epochs,
-                "epochs_trained": lib.ann_get_history_count(self._ptr) - epochs_before,
+                "epochs_trained": lib.ann_get_epochs_trained(self._ptr),
                 "loss": loss,
             }
             if stopping is not None:
@@ -638,8 +654,8 @@ class Sequential:
         Returns:
             Predictions (numpy array if available, else nested lists):
             (samples, outputs), or (samples, channels, height, width) when the
-            output layer produces an image (Conv2D, MaxPool2D, UpSample2D or
-            Reshape), e.g. an autoencoder's
+            output layer produces an image (Conv2D, MaxPool2D, UpSample2D,
+            Reshape, or a BatchNormalization of an image), e.g. an autoencoder's
         """
         if not self._built:
             raise NetworkError("Model must be trained before making predictions")
@@ -796,6 +812,10 @@ class Sequential:
                 layers.append(UpSample2D(settings[0]))
             elif kind == lib.LAYER_KIND_RESHAPE:
                 layers.append(Reshape((channels, height, width)))
+            elif kind == lib.LAYER_KIND_GLOBAL_AVGPOOL2D:
+                layers.append(GlobalAveragePooling2D())
+            elif kind == lib.LAYER_KIND_BATCHNORM:
+                layers.append(BatchNormalization(activation=activation))
             else:
                 lib.ann_free_network(ptr)
                 raise NetworkError(f"{filepath} contains layer types pyann does not support yet")
@@ -866,9 +886,12 @@ class Sequential:
             raise ValueError(f"x_calibration must be samples x {input_size} features, got shape {shape}")
 
         x_tensor = Tensor(x_arr)    # keep it alive through the call
+        clear_c_error()
         ptr = lib.ann_quantize(self._ptr, x_tensor._ptr)
         if ptr == ffi.NULL:
-            raise NetworkError("Quantization failed (softmax is supported only on the output layer)")
+            raise NetworkError(c_error_message(
+                "Quantization failed (softmax is supported only on the output layer, and each "
+                "BatchNormalization must follow a Dense or Conv2D layer without an activation)"))
         output_size = lib.ann_get_layer_nodes(self._ptr, lib.ann_get_layer_count(self._ptr) - 1)
         return QuantizedModel(ptr, self._input_shape, input_size, output_size, self._output_shape())
 
@@ -1136,6 +1159,10 @@ class Sequential:
                 text = f"UpSample2D({layer.size}x) -> {shape}"
             elif isinstance(layer, Reshape):
                 text = f"Reshape -> {shape}"
+            elif isinstance(layer, GlobalAveragePooling2D):
+                text = f"GlobalAveragePooling2D -> {shape}"
+            elif isinstance(layer, BatchNormalization):
+                text = f"BatchNormalization({_activation_name(layer)}) -> {shape}"
             else:
                 text = f"Flatten -> {shape}"
             lines.append(f"{text} - {params:,} params" if params else text)
