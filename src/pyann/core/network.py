@@ -6,8 +6,9 @@ from pathlib import Path
 from pyann._bindings.ffi import ffi, lib, gpu_enabled
 from pyann.core.layers import (
     Layer, Dense, Input, Conv2D, MaxPool2D, Flatten, UpSample2D, Reshape,
-    GlobalAveragePooling2D, BatchNormalization, parse_layer,
+    GlobalAveragePooling2D, BatchNormalization, DepthwiseConv2D, Conv1D, MaxPool1D, parse_layer,
 )
+from pyann.core.layers import _ConvBase, _PoolBase
 from pyann.core.tensor import Tensor
 from pyann.activations import Activation
 from pyann.losses import Loss, parse_loss
@@ -94,17 +95,23 @@ _NOISE_TYPES = {"gaussian": "NOISE_GAUSSIAN", "masking": "NOISE_MASKING", "salt_
 
 def as_images(rows: ArrayLike, output_shape: Optional[Tuple[int, ...]]) -> ArrayLike:
     """Rows of a model's outputs as (N, channels, height, width) when the
-    output is an image (output_shape has 3 dims); otherwise unchanged."""
-    if output_shape is None or len(output_shape) != 3:
+    output is an image (output_shape has 3 dims), or (N, channels, steps)
+    when it is a sequence (2 dims); otherwise unchanged."""
+    if output_shape is None or len(output_shape) not in (2, 3):
         return rows
     if has_numpy():
         return rows.reshape((len(rows),) + tuple(output_shape))
+    if len(output_shape) == 2:
+        c, w = output_shape
+        return [[row[k * w:(k + 1) * w] for k in range(c)] for row in rows]
     c, h, w = output_shape
     return [[[row[(k * h + i) * w:(k * h + i + 1) * w] for i in range(h)] for k in range(c)] for row in rows]
 
 
-# layers that need an image (channels, height, width) input
-_IMAGE_LAYERS = (Conv2D, MaxPool2D, UpSample2D, GlobalAveragePooling2D)
+# layers that need an image (channels, height, width) input, and those that
+# read a sequence (channels, steps): an image one row high
+_IMAGE_LAYERS = (_ConvBase, _PoolBase, UpSample2D, GlobalAveragePooling2D)
+_SEQUENCE_LAYERS = (Conv1D, MaxPool1D)
 
 
 def _prod(shape) -> int:
@@ -184,7 +191,7 @@ class Sequential:
             if self._input_shape is not None:
                 raise InvalidParameterError("Input shape already set")
             self._input_shape = layer.shape
-        elif isinstance(layer, (Dense, Conv2D)):
+        elif isinstance(layer, (Dense, Conv2D, Conv1D)):
             if layer.input_shape is not None:
                 if self._input_shape is not None and len(self._layers) > 0:
                     raise InvalidParameterError("Input shape already set")
@@ -295,6 +302,9 @@ class Sequential:
             lib.ann_set_learning_rate(self._ptr, self._optimizer.learning_rate)
         
         try:
+            # the input to each layer: the input layer's shape, then each layer's output
+            in_shapes = [self._image_input_shape() or (_prod(self._input_shape),)]
+            in_shapes += [shape for _, shape, _ in self._layer_shapes()]
             image = self._image_input_shape()
             if image is not None:
                 result = lib.ann_add_input(self._ptr, *image)
@@ -308,11 +318,12 @@ class Sequential:
                     is_output = (i == len(self._layers) - 1)
                     layer_type = lib.LAYER_OUTPUT if is_output else lib.LAYER_HIDDEN
                     result = lib.ann_add_layer(self._ptr, layer.units, layer_type, layer.activation_type)
-                elif isinstance(layer, Conv2D):
-                    result = lib.ann_add_conv2d(self._ptr, layer.filters, layer.kernel_size, layer.strides,
-                                                layer.padding, layer.activation_type)
-                elif isinstance(layer, MaxPool2D):
-                    result = lib.ann_add_maxpool2d(self._ptr, layer.pool_size, layer.strides)
+                elif isinstance(layer, _ConvBase):
+                    channels = in_shapes[i][0]
+                    result = lib.ann_add_conv2d_ex(self._ptr, layer.output_filters(channels), *layer.window(),
+                                                   layer.conv_groups(channels), layer.activation_type)
+                elif isinstance(layer, _PoolBase):
+                    result = lib.ann_add_maxpool2d_ex(self._ptr, *layer.window())
                 elif isinstance(layer, Flatten):
                     result = lib.ann_add_flatten(self._ptr)
                 elif isinstance(layer, UpSample2D):
@@ -339,29 +350,51 @@ class Sequential:
         
         self._built = True
     
-    def _uses_images(self) -> bool:
-        """Whether the input must be an image: a Conv2D, MaxPool2D, UpSample2D
-        or GlobalAveragePooling2D layer reads it before any Reshape makes an
-        image of its own."""
+    def _first_image_layer(self) -> Optional[Layer]:
+        """The first layer that needs an image input, unless a Reshape makes
+        an image of its own before it."""
         for layer in self._layers:
             if isinstance(layer, Reshape):
-                return False
+                return None
             if isinstance(layer, _IMAGE_LAYERS):
-                return True
-        return False
+                return layer
+        return None
+
+    def _uses_images(self) -> bool:
+        """Whether the input must be an image: a Conv2D, MaxPool2D, Conv1D,
+        UpSample2D or GlobalAveragePooling2D layer (and the like) reads it
+        before any Reshape makes an image of its own."""
+        return self._first_image_layer() is not None
+
+    def _is_sequence(self) -> bool:
+        """Whether the input is a sequence (channels, steps): a 2-D input
+        shape read first by a Conv1D or MaxPool1D layer."""
+        shape = self._input_shape
+        return shape is not None and len(shape) == 2 and isinstance(self._first_image_layer(), _SEQUENCE_LAYERS)
 
     def _image_input_shape(self) -> Optional[Tuple[int, int, int]]:
         """(channels, height, width) of the input when it is an image, else None.
         
-        A 3-D input shape is an image; a 2-D (height, width) shape is a
-        one-channel image when convolution or pooling layers follow.
+        A 3-D input shape is an image; a 2-D shape is a sequence (channels,
+        steps), the image (channels, 1, steps), when a Conv1D or MaxPool1D
+        layer reads it, or else a one-channel image (height, width) when
+        convolution or pooling layers follow.
         """
         shape = self._input_shape
         if shape is not None and len(shape) == 3:
             return tuple(shape)
+        if shape is not None and len(shape) == 2 and self._is_sequence():
+            return (shape[0], 1, shape[1])
         if shape is not None and len(shape) == 2 and self._uses_images():
             return (1, shape[0], shape[1])
         return None
+
+    def _public_shape(self, shape: Tuple[int, ...]) -> Tuple[int, ...]:
+        """A layer's shape as the user sees it: (channels, steps) for the
+        images one row high of a sequence model, else unchanged."""
+        if self._is_sequence() and len(shape) == 3 and shape[1] == 1:
+            return (shape[0], shape[2])
+        return shape
 
     def _layer_shapes(self) -> List[Tuple[Layer, Tuple[int, ...], int]]:
         """(layer, output shape, parameter count) for each layer.
@@ -372,7 +405,8 @@ class Sequential:
         image = self._image_input_shape()
         if self._uses_images() and image is None:
             raise NetworkError("Conv2D, MaxPool2D, UpSample2D and GlobalAveragePooling2D need an image "
-                               "input_shape: (channels, height, width)")
+                               "input_shape: (channels, height, width); Conv1D and MaxPool1D a sequence: "
+                               "(channels, steps)")
         shape = image if image is not None else (_prod(self._input_shape),)
         
         result = []
@@ -394,9 +428,11 @@ class Sequential:
             elif isinstance(layer, _IMAGE_LAYERS):
                 if len(shape) != 3:
                     raise NetworkError(f"Layer {i} ({name}) needs an image input, but the layer before outputs {shape}")
+                if isinstance(layer, _ConvBase) and shape[0] % layer.conv_groups(shape[0]):
+                    raise NetworkError(f"Layer {i} ({name}) has {layer.conv_groups(shape[0])} groups, which do "
+                                       f"not divide its {shape[0]} input channels")
                 new_shape = layer.output_shape(shape)
-                params = (layer.filters * (shape[0] * layer.kernel_size ** 2 + 1)
-                          if isinstance(layer, Conv2D) else 0)
+                params = layer.param_count(shape[0]) if isinstance(layer, _ConvBase) else 0
             else:
                 new_shape = (_prod(shape),)
                 params = 0
@@ -411,13 +447,16 @@ class Sequential:
         return as_rows(data, self._input_shape, name)
 
     def _output_shape(self) -> Optional[Tuple[int, ...]]:
-        """Shape of one output: (units,), or (channels, height, width) for an image."""
-        return self._layer_shapes()[-1][1] if self._layers and self._input_shape else None
+        """Shape of one output: (units,), (channels, height, width) for an
+        image, or (channels, steps) for a sequence model's sequence."""
+        if not self._layers or not self._input_shape:
+            return None
+        return self._public_shape(self._layer_shapes()[-1][1])
 
     def _targets_as_rows(self, data: ArrayLike, name: str = "y") -> ArrayLike:
-        """Flatten image targets (e.g. an autoencoder's) to rows, like inputs."""
+        """Flatten image or sequence targets (e.g. an autoencoder's) to rows, like inputs."""
         shape = self._output_shape()
-        return as_rows(data, shape if shape and len(shape) == 3 else None, name)
+        return as_rows(data, shape if shape and len(shape) >= 2 else None, name)
 
     def _apply_training_settings(self) -> None:
         """Push the optional training settings from compile() to the C network."""
@@ -789,13 +828,18 @@ class Sequential:
         n_layers = lib.ann_get_layer_count(ptr)
         dims = ffi.new("int[3]")
         settings = ffi.new("int[3]")
-        layers, input_shape = [], None
+        win = ffi.new("int[6]")
+        layers, input_shape, in_dims = [], None, None
         
         for i in range(n_layers):
             kind = lib.ann_get_layer_kind(ptr, i)
             lib.ann_get_layer_shape(ptr, i, dims, dims + 1, dims + 2)
             lib.ann_get_layer_settings(ptr, i, settings, settings + 1, settings + 2)
+            lib.ann_get_layer_window(ptr, i, win, win + 1, win + 2, win + 3, win + 4, win + 5)
             channels, height, width = dims[0], dims[1], dims[2]
+            kh, kw, sh, sw, ph, pw = (win[k] for k in range(6))
+            # a 1 x k window over an input one row high is a 1-D layer
+            one_d = in_dims is not None and in_dims[1] == 1 and kh == 1 and sh == 1 and ph == 0
             activation = Activation(lib.ann_get_layer_activation(ptr, i))
             
             if i == 0:
@@ -803,9 +847,16 @@ class Sequential:
             elif kind == lib.LAYER_KIND_DENSE:
                 layers.append(Dense(lib.ann_get_layer_nodes(ptr, i), activation=activation))
             elif kind == lib.LAYER_KIND_CONV2D:
-                layers.append(Conv2D(channels, settings[0], settings[1], settings[2], activation=activation))
+                groups, in_channels = lib.ann_get_layer_groups(ptr, i), in_dims[0]
+                if groups > 1 and groups == in_channels:
+                    layers.append(DepthwiseConv2D((kh, kw), (sh, sw), (ph, pw), channels // in_channels,
+                                                  activation=activation))
+                elif one_d:
+                    layers.append(Conv1D(channels, kw, sw, pw, activation=activation, groups=groups))
+                else:
+                    layers.append(Conv2D(channels, (kh, kw), (sh, sw), (ph, pw), activation=activation, groups=groups))
             elif kind == lib.LAYER_KIND_MAXPOOL2D:
-                layers.append(MaxPool2D(settings[0], settings[1]))
+                layers.append(MaxPool1D(kw, sw) if one_d else MaxPool2D((kh, kw), (sh, sw)))
             elif kind == lib.LAYER_KIND_FLATTEN:
                 layers.append(Flatten())
             elif kind == lib.LAYER_KIND_UPSAMPLE2D:
@@ -819,6 +870,7 @@ class Sequential:
             else:
                 lib.ann_free_network(ptr)
                 raise NetworkError(f"{filepath} contains layer types pyann does not support yet")
+            in_dims = (channels, height, width)
         
         # Create model wrapper
         model = cls.__new__(cls)
@@ -829,6 +881,11 @@ class Sequential:
         model._ptr = ptr
         model._built = True
         model._input_shape = input_shape
+        # an input one row high that a 1-D layer reads first is a sequence (channels, steps)
+        if len(input_shape) == 3 and input_shape[1] == 1:
+            model._input_shape = (input_shape[0], input_shape[2])
+            if not model._is_sequence():
+                model._input_shape = input_shape
         return model
     
     def export_onnx(self, filepath: Union[str, Path]) -> None:
@@ -1146,15 +1203,29 @@ class Sequential:
         
         total_params = 0
         shapes = self._layer_shapes() if self._input_shape and self._layers else []
-        for layer, shape, params in shapes:
+        in_channels = (self._image_input_shape() or (0,))[0]
+        for layer, internal_shape, params in shapes:
+            shape = self._public_shape(internal_shape)
             total_params += params
             if isinstance(layer, Dense):
                 text = f"Dense({layer.units}, {_activation_name(layer)})"
-            elif isinstance(layer, Conv2D):
-                text = (f"Conv2D({layer.filters}, {layer.kernel_size}x{layer.kernel_size}, stride {layer.strides}, "
-                        f"padding {layer.padding}, {_activation_name(layer)}) -> {shape}")
+            elif isinstance(layer, Conv1D):
+                groups = f", {layer.groups} groups" if layer.groups > 1 else ""
+                text = (f"Conv1D({layer.filters}, {layer.kernel_size}, stride {layer.strides}, "
+                        f"padding {layer.padding}{groups}, {_activation_name(layer)}) -> {shape}")
+            elif isinstance(layer, _ConvBase):
+                kh, kw = layer.window()[:2]
+                groups = layer.conv_groups(in_channels)
+                grouped = f", {groups} groups" if groups > 1 and isinstance(layer, Conv2D) else ""
+                head = (f"DepthwiseConv2D(x{layer.depth_multiplier}" if isinstance(layer, DepthwiseConv2D)
+                        else f"Conv2D({layer.filters}")
+                text = (f"{head}, {kh}x{kw}, stride {layer.strides}, padding {layer.padding}{grouped}, "
+                        f"{_activation_name(layer)}) -> {shape}")
+            elif isinstance(layer, MaxPool1D):
+                text = f"MaxPool1D({layer.pool_size}, stride {layer.strides}) -> {shape}"
             elif isinstance(layer, MaxPool2D):
-                text = f"MaxPool2D({layer.pool_size}x{layer.pool_size}, stride {layer.strides}) -> {shape}"
+                kh, kw = layer.window()[:2]
+                text = f"MaxPool2D({kh}x{kw}, stride {layer.strides}) -> {shape}"
             elif isinstance(layer, UpSample2D):
                 text = f"UpSample2D({layer.size}x) -> {shape}"
             elif isinstance(layer, Reshape):
@@ -1166,6 +1237,7 @@ class Sequential:
             else:
                 text = f"Flatten -> {shape}"
             lines.append(f"{text} - {params:,} params" if params else text)
+            in_channels = internal_shape[0]
         
         lines.append("=" * 50)
         lines.append(f"Total parameters: {total_params:,}")

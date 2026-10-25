@@ -18,6 +18,7 @@ from pyann.core.quantized import QuantizedModel, runtime_header_path
 from pyann.core.layers import (
     Dense, Input, Conv2D, MaxPool2D, MaxPooling2D, Flatten, UpSample2D, UpSampling2D, Reshape,
     GlobalAveragePooling2D, GlobalAvgPool2D, BatchNormalization, BatchNorm,
+    DepthwiseConv2D, Conv1D, MaxPool1D, MaxPooling1D,
 )
 from pyann.optimizers import Optimizer, SGD, Momentum, RMSProp, AdaGrad, Adam
 from pyann.losses import Loss
@@ -48,6 +49,10 @@ __all__ = [
     "GlobalAvgPool2D",
     "BatchNormalization",
     "BatchNorm",
+    "DepthwiseConv2D",
+    "Conv1D",
+    "MaxPool1D",
+    "MaxPooling1D",
     "Optimizer",
     "SGD",
     "Momentum",

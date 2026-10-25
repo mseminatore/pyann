@@ -5,7 +5,7 @@ Python wrapper for the [libann](https://github.com/mseminatore/ann) neural netwo
 ## Features
 
 - **Keras-style API**: Familiar `Sequential` model with `add()`, `fit()`, `predict()`
-- **Layers**: Dense, plus Conv2D, MaxPool2D, GlobalAveragePooling2D, BatchNormalization and Flatten for convolutional networks, and UpSample2D and Reshape for decoders (autoencoders)
+- **Layers**: Dense, plus Conv2D (any window, grouped), DepthwiseConv2D, MaxPool2D, GlobalAveragePooling2D, BatchNormalization and Flatten for convolutional networks, Conv1D and MaxPool1D for sequences such as time series, and UpSample2D and Reshape for decoders (autoencoders)
 - **Input noise** for denoising autoencoders: Gaussian, masking or salt-and-pepper
 - **Multiple optimizers**: SGD, Momentum, RMSProp, AdaGrad, Adam
 - **Activation functions**: Sigmoid, ReLU, LeakyReLU, Tanh, Softsign, Softmax, GELU
@@ -210,6 +210,58 @@ batch norm is redundant, since the batch norm subtracts the mean.
 `quantize()` and C export fold each batch norm into the `Dense` or `Conv2D`
 layer before it, which must have no activation. Both layers run on the GPU
 with Metal or Vulkan.
+
+### Depthwise Separable Convolutions (MobileNet)
+
+`DepthwiseConv2D` filters each channel on its own; a 1x1 `Conv2D` after it
+mixes the channels. Together they do the work of one convolution with
+several times fewer weights and multiply-adds, which suits small, quantized
+models. `Conv2D(..., groups=g)` is the general form, and kernels, strides and
+padding may also be `(height, width)` pairs:
+
+```python
+from pyann import Sequential, Input, Conv2D, DepthwiseConv2D, BatchNormalization, GlobalAveragePooling2D, Dense
+
+model = Sequential([
+    Input((1, 28, 28)),
+    Conv2D(32, 3, padding='same'),
+    BatchNormalization(activation='relu'),
+    DepthwiseConv2D(3, strides=2, padding=1),    # -> (32, 14, 14): 9 weights per channel
+    BatchNormalization(activation='relu'),
+    Conv2D(64, 1),                               # -> (64, 14, 14): mixes the channels
+    BatchNormalization(activation='relu'),
+    GlobalAveragePooling2D(),
+    Dense(10, activation='softmax'),
+])
+```
+
+### Sequences and Time Series
+
+`Conv1D` and `MaxPool1D` slide along sequences. A sample of L steps with C
+features per step has shape `(C, L)`, channels-first as in PyTorch's
+`nn.Conv1d`, so a batch is `(N, C, L)`; channels-last data `(N, L, C)` needs
+`x.transpose(0, 2, 1)`:
+
+```python
+from pyann import Sequential, Conv1D, BatchNormalization, MaxPool1D, GlobalAveragePooling2D, Dense
+
+# x: (N, 3, 128) float32 sequences of 3 features, y: (N, 4) one-hot labels
+model = Sequential([
+    Conv1D(16, 5, padding='same', input_shape=(3, 128)),   # -> (16, 128)
+    BatchNormalization(activation='relu'),
+    MaxPool1D(2),                                          # -> (16, 64)
+    Conv1D(32, 3, padding='same', activation='relu'),      # -> (32, 64)
+    GlobalAveragePooling2D(),                              # -> (32,)
+    Dense(4, activation='softmax'),
+])
+model.compile(optimizer='adam', loss='cce')
+model.fit(x, y, epochs=20, batch_size=32)
+```
+
+A model whose output is a sequence (e.g. one that denoises signals) returns
+`(N, C, L)` from `predict()`. These layers run on the GPU with Metal or
+Vulkan, save and load, export to ONNX, quantize and export to C like the
+2-D ones; `load_onnx()` also reads PyTorch `nn.Conv1d` models.
 
 ### Autoencoders and Denoising
 
