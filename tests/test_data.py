@@ -131,13 +131,19 @@ IMDB_LIKE = (
 )
 
 
+
+def write_csv(path, text):
+    """Write text with exactly these line breaks (write_text makes them \\r\\n on Windows)."""
+    path.write_bytes(text.encode("utf-8"))
+
+
 class TestLoadCsvErrors:
     """load_csv names the field or line at fault instead of misreading text."""
 
     @pytest.mark.parametrize("use_c", [True, False])
     def test_text_field(self, tmp_path, use_c):
         path = tmp_path / "imdb.csv"
-        path.write_text(IMDB_LIKE)
+        write_csv(path, IMDB_LIKE)
         with pytest.raises(ValueError, match=r"line 2, column 1: .*not a number.*load_text_csv"):
             load_csv(str(path), has_header=True, use_c_library=use_c)
 
@@ -189,16 +195,26 @@ class TestLoadTextCsv:
 
     def test_columns_by_name(self, tmp_path):
         path = tmp_path / "imdb.csv"
-        path.write_text(IMDB_LIKE)
+        write_csv(path, IMDB_LIKE)
         data = load_text_csv(path)
         assert list(data) == ["review", "sentiment"]
         assert data["sentiment"] == ["positive", "positive", "negative"]
         assert data["review"][0] == 'One of the reviewers said, "really" good.<br /><br />Yes'
         assert data["review"][1] == "A wonderful little production.\nA line break inside"
 
+    def test_windows_line_breaks(self, tmp_path):
+        path = tmp_path / "crlf.csv"
+        write_csv(path, IMDB_LIKE.replace("\n", "\r\n"))
+        data = load_text_csv(path)
+        assert data["sentiment"] == ["positive", "positive", "negative"]
+        assert data["review"][1] == "A wonderful little production.\r\nA line break inside"   # kept as written
+        numbers = tmp_path / "crlf_numbers.csv"
+        write_csv(numbers, "a,b\r\n1,2\r\n3,4\r\n")
+        assert load_csv(str(numbers), has_header=True)[1:] == (2, 2)
+
     def test_selecting_columns(self, tmp_path):
         path = tmp_path / "imdb.csv"
-        path.write_text(IMDB_LIKE)
+        write_csv(path, IMDB_LIKE)
         assert list(load_text_csv(path, columns=["sentiment"])) == ["sentiment"]
         assert list(load_text_csv(path, columns=[-1, 0])) == ["sentiment", "review"]
         with pytest.raises(ValueError, match="no column 'label'"):
@@ -234,7 +250,7 @@ class TestLoadTextCsv:
         import numpy as np
         from pyann import Tokenizer, pad_sequences, strip_html
         path = tmp_path / "imdb.csv"
-        path.write_text(IMDB_LIKE)
+        write_csv(path, IMDB_LIKE)
         data = load_text_csv(path)
         tok = Tokenizer(preprocess=strip_html).fit_on_texts(data["review"])
         assert "br" not in tok.word_index
