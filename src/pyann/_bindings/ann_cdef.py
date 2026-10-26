@@ -23,7 +23,9 @@ typedef enum {
     LAYER_KIND_UPSAMPLE2D,
     LAYER_KIND_RESHAPE,
     LAYER_KIND_GLOBAL_AVGPOOL2D,
-    LAYER_KIND_BATCHNORM
+    LAYER_KIND_BATCHNORM,
+    LAYER_KIND_EMBEDDING,
+    LAYER_KIND_GLOBAL_MAXPOOL2D
 } Layer_kind;
 
 // Activation types
@@ -144,6 +146,9 @@ int ann_add_upsample2d(PNetwork pnet, int scale);
 int ann_add_reshape(PNetwork pnet, int channels, int height, int width);
 int ann_add_global_avgpool2d(PNetwork pnet);
 int ann_add_batchnorm(PNetwork pnet, Activation_type activation);
+int ann_add_embedding(PNetwork pnet, int vocab_size, int embed_dim, int padding_idx);
+int ann_add_embedding_masked(PNetwork pnet, int vocab_size, int embed_dim, int padding_idx);
+int ann_add_global_maxpool2d(PNetwork pnet);
 void ann_free_network(PNetwork pnet);
 
 // Data loading
@@ -227,6 +232,7 @@ int ann_get_layer_shape(const PNetwork pnet, int layer_index, int *channels, int
 int ann_get_layer_settings(const PNetwork pnet, int layer_index, int *size, int *stride, int *padding);
 int ann_get_layer_window(const PNetwork pnet, int layer, int *kernel_h, int *kernel_w, int *stride_h, int *stride_w, int *padding_h, int *padding_w);
 int ann_get_layer_groups(const PNetwork pnet, int layer);
+int ann_get_layer_masked(const PNetwork pnet, int layer);
 
 // Confusion matrix
 real ann_confusion_matrix(PNetwork pnet, PTensor inputs, PTensor outputs, int *tp, int *fp, int *tn, int *fn);
