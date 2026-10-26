@@ -649,21 +649,24 @@ Small networks (≤10 nodes per layer) get a detailed diagram with individual no
 ### Data Utilities
 
 ```python
-from pyann.utils import load_csv, split_data
-from pyann.utils.data import normalize, one_hot_encode
+from pyann.utils import load_csv, normalize, one_hot_encode, split_data
 
-# Load CSV data
+# Load CSV data: features, then an integer class label in the last column
 data, rows, cols = load_csv('data.csv', has_header=True)
+X, labels = data[:, :-1], data[:, -1]
 
-# Normalize features
-X_norm, mean, std = normalize(X)
+# Normalize features (keep mean and std to apply to test data: normalize(X_test, mean=mean, std=std))
+X_norm, mean, std = normalize(X, axis=0)
 
 # One-hot encode labels
-y_encoded = one_hot_encode(labels, num_classes=10)
+y = one_hot_encode(labels, num_classes=10)
 
 # Split into train/validation sets
-X_train, y_train, X_val, y_val = split_data(X, y, train_ratio=0.8)
+X_train, y_train, X_val, y_val = split_data(X_norm, y, train_ratio=0.8)
 ```
+
+`normalize` and `one_hot_encode` need NumPy; `load_csv` and `split_data` also
+work without it (returning lists).
 
 ## API Reference
 
