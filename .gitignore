@@ -3,6 +3,8 @@ __pycache__/
 *.py[codz]
 *$py.class
 
+activity_deploy/
+
 # data files
 fashion-mnist_train.csv
 fashion-mnist_test.csv
