@@ -103,3 +103,21 @@ class TestOneHotEncode:
         one_hot = one_hot_encode(labels)
         
         assert one_hot.shape == (3, 3)
+
+
+class TestUtilsPackage:
+    """pyann.utils exports every data helper, as the README imports them."""
+
+    def test_readme_data_utilities(self, tmp_path):
+        np = pytest.importorskip("numpy")
+        from pyann.utils import load_csv, normalize, one_hot_encode, split_data
+        path = tmp_path / "data.csv"
+        path.write_text("a,b,label\n" + "".join(f"{i},{2 * i},{i % 3}\n" for i in range(10)))
+        data, rows, cols = load_csv(str(path), has_header=True)
+        X, labels = data[:, :-1], data[:, -1]
+        X_norm, mean, std = normalize(X, axis=0)
+        assert np.allclose(X_norm.mean(axis=0), 0, atol=1e-6) and mean.shape == (1, 2)
+        y = one_hot_encode(labels, num_classes=10)
+        assert y.shape == (10, 10) and y[4, 1] == 1.0
+        X_train, y_train, X_val, y_val = split_data(X_norm, y, train_ratio=0.8)
+        assert X_train.shape == (8, 2) and y_val.shape == (2, 10)
