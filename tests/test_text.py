@@ -1,7 +1,9 @@
 """Tests for text models: Tokenizer, pad_sequences, Embedding (with padding
 masks) and global max pooling."""
 
+import gzip
 import json
+import warnings
 
 import pytest
 
@@ -9,7 +11,7 @@ import pyann
 import pyann.utils.compat as compat
 from pyann import (BatchNormalization, Conv1D, Conv2D, Dense, Embedding, GlobalAveragePooling1D,
                    GlobalMaxPool2D, GlobalMaxPooling1D, GlobalMaxPooling2D, MaxPool1D, Sequential, Tokenizer,
-                   pad_sequences)
+                   load_word_vectors, pad_sequences, strip_html)
 from pyann.exceptions import NetworkError
 
 np = pytest.importorskip("numpy")
@@ -280,3 +282,140 @@ class TestGlobalMaxPoolingImages:
         assert np.allclose(back.predict(x), model.predict(x), atol=1e-6)
         q = model.quantize(x)
         assert q.evaluate(x, y) >= 0.9
+
+
+# --- Cleaning text -----------------------------------------------------------
+
+class TestStripHtml:
+    def test_tags_entities_scripts_and_comments(self):
+        text = ('Great film!<br /><br />I <b class="x">loved</b> it &amp; the &quot;ending&quot;'
+                '<script type="text/javascript">var a = 1 < 2;</script><STYLE>p {}</STYLE><!-- note -->.')
+        assert strip_html(text).split() == ["Great", "film!", "I", "loved", "it", "&", "the", '"ending"', "."]
+
+    def test_declarations(self):
+        assert strip_html('<?xml version="1.0"?><!DOCTYPE html><html><p>hi</p></html>').split() == ["hi"]
+
+    def test_plain_text_unchanged(self):
+        assert strip_html("no tags, 3 < 4 and 5 > 2") == "no tags, 3 < 4 and 5 > 2"
+
+    def test_rejects_non_strings(self):
+        with pytest.raises(TypeError):
+            strip_html(None)
+
+
+class TestPreprocess:
+    def test_tokenizer_applies_it_first(self):
+        assert Tokenizer().tokenize("one<br />two &amp;") == ["one", "br", "two", "amp"]
+        assert Tokenizer(preprocess=strip_html).tokenize("one<br />two &amp;") == ["one", "two"]
+        upper = Tokenizer(preprocess=lambda t: t.replace("colour", "color")).fit_on_texts(["colour color"])
+        assert upper.word_index == {"color": 1}
+
+    def test_checks(self):
+        with pytest.raises(TypeError):
+            Tokenizer(preprocess="strip_html")
+        with pytest.raises(TypeError, match="return a string"):
+            Tokenizer(preprocess=lambda t: None).fit_on_texts(["x"])
+
+    def test_json_keeps_strip_html_by_name(self):
+        tok = Tokenizer(preprocess=strip_html).fit_on_texts(["a <i>b</i>"])
+        assert json.loads(tok.to_json())["preprocess"] == "strip_html"
+        back = Tokenizer.from_json(tok.to_json())
+        assert back.preprocess is strip_html
+        assert back.texts_to_sequences(["<p>b</p>"]) == tok.texts_to_sequences(["<p>b</p>"])
+
+    def test_json_with_a_function_of_your_own(self):
+        def clean(text):
+            return text.replace("_", " ")
+        tok = Tokenizer(preprocess=clean).fit_on_texts(["a_b"])
+        assert json.loads(tok.to_json())["preprocess"] == "custom"
+        with pytest.warns(UserWarning, match="preprocess"):
+            plain = Tokenizer.from_json(tok.to_json())
+        assert plain.preprocess is None
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            back = Tokenizer.from_json(tok.to_json(), preprocess=clean)
+        assert back.texts_to_sequences(["b_a"]) == [[2, 1]]
+
+    def test_old_json_without_the_field(self):
+        tok = Tokenizer().fit_on_texts(["a b"])
+        data = json.loads(tok.to_json())
+        del data["preprocess"]
+        assert Tokenizer.from_json(json.dumps(data)).word_index == tok.word_index
+
+
+# --- Pre-trained word vectors ------------------------------------------------
+
+GLOVE = """the 0.1 0.2 0.3
+good 1 2 3
+. . . 7 7 7
+film -1 -2 -3
+bad 4 5 6
+good 9 9 9
+"""
+
+
+class TestLoadWordVectors:
+    def test_glove_rows_follow_the_ids(self, tmp_path):
+        path = tmp_path / "glove.txt"
+        path.write_text(GLOVE)
+        tok = Tokenizer(oov_token="<unk>").fit_on_texts(["good film good", "bad movie"])
+        matrix, found = load_word_vectors(path, tok)
+        assert matrix.shape == (tok.vocab_size, 3) and matrix.dtype == np.float32
+        assert found == 3                                   # good, film, bad; not movie
+        assert np.array_equal(matrix[tok.word_index["good"]], [1, 2, 3])    # the first "good"
+        assert np.array_equal(matrix[tok.word_index["film"]], [-1, -2, -3])
+        assert not matrix[0].any() and not matrix[1].any()                  # padding, <unk>
+        assert not matrix[tok.word_index["movie"]].any()
+
+    def test_word2vec_header_and_gzip(self, tmp_path):
+        path = tmp_path / "vectors.vec.gz"
+        with gzip.open(path, "wt", encoding="utf-8") as f:
+            f.write("3 2\nb 1 1\na 2 2\nc 3 3\n")
+        matrix, found = load_word_vectors(path, {"a": 1, "b": 2, "z": 3})
+        assert found == 2 and matrix.shape == (4, 2)
+        assert np.array_equal(matrix, [[0, 0], [2, 2], [1, 1], [0, 0]])
+
+    def test_num_words_and_vocab_size(self, tmp_path):
+        path = tmp_path / "glove.txt"
+        path.write_text(GLOVE)
+        tok = Tokenizer(num_words=3).fit_on_texts(["good good good film film bad"])
+        matrix, found = load_word_vectors(path, tok)
+        assert matrix.shape == (3, 3) and found == 2        # bad is past num_words
+        matrix, _ = load_word_vectors(path, tok, vocab_size=10)
+        assert matrix.shape == (10, 3)
+
+    def test_random_vectors_for_missing_words(self, tmp_path):
+        path = tmp_path / "glove.txt"
+        path.write_text(GLOVE)
+        index = {"good": 1, "film": 2, **{f"w{i}": i for i in range(3, 400)}}
+        matrix, found = load_word_vectors(path, index, missing="random", seed=0)
+        assert found == 2 and not matrix[0].any()
+        assert np.array_equal(matrix[1], [1, 2, 3])
+        found_values = np.array([1, 2, 3, -1, -2, -3])
+        assert abs(matrix[3:].std() - found_values.std()) < 0.2
+        again, _ = load_word_vectors(path, index, missing="random", seed=0)
+        assert np.array_equal(matrix, again)
+
+    def test_errors(self, tmp_path):
+        path = tmp_path / "glove.txt"
+        path.write_text(GLOVE)
+        with pytest.raises(ValueError, match="expected 4"):
+            load_word_vectors(path, {"good": 1}, dim=4)
+        bad = tmp_path / "bad.txt"
+        bad.write_text("good 1 2 3\nfilm 1 2\n")
+        with pytest.raises(ValueError, match="line 2"):
+            load_word_vectors(bad, {"good": 1, "film": 2})
+        header = tmp_path / "header.vec"
+        header.write_text("2 5\ngood 1 2 3 4 5\n")
+        with pytest.raises(ValueError, match="5-dimensional"):
+            load_word_vectors(header, {"good": 1}, dim=3)
+        with pytest.raises(ValueError, match="missing"):
+            load_word_vectors(path, {"good": 1}, missing="mean")
+        with pytest.raises(ValueError, match="fit_on_texts"):
+            load_word_vectors(path, Tokenizer())
+        with pytest.raises(TypeError):
+            load_word_vectors(path, ["good"])
+        empty = tmp_path / "empty.txt"
+        empty.write_text("")
+        with pytest.raises(ValueError, match="no vectors"):
+            load_word_vectors(empty, {"good": 1})

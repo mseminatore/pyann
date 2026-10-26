@@ -5,7 +5,7 @@ Python wrapper for the [libann](https://github.com/mseminatore/ann) neural netwo
 ## Features
 
 - **Keras-style API**: Familiar `Sequential` model with `add()`, `fit()`, `predict()`
-- **Layers**: Dense, plus Conv2D (any window, grouped), DepthwiseConv2D, MaxPool2D, GlobalAveragePooling2D, BatchNormalization and Flatten for convolutional networks, Conv1D and MaxPool1D for sequences such as time series, Embedding (with padding masks), GlobalMaxPooling1D/2D and a Tokenizer for text, and UpSample2D and Reshape for decoders (autoencoders)
+- **Layers**: Dense, plus Conv2D (any window, grouped), DepthwiseConv2D, MaxPool2D, GlobalAveragePooling2D, BatchNormalization and Flatten for convolutional networks, Conv1D and MaxPool1D for sequences such as time series, Embedding (with padding masks and pre-trained GloVe/word2vec vectors), GlobalMaxPooling1D/2D and a Tokenizer for text, and UpSample2D and Reshape for decoders (autoencoders)
 - **Input noise** for denoising autoencoders: Gaussian, masking or salt-and-pepper
 - **Multiple optimizers**: SGD, Momentum, RMSProp, AdaGrad, Adam
 - **Activation functions**: Sigmoid, ReLU, LeakyReLU, Tanh, Softsign, Softmax, GELU
@@ -299,6 +299,84 @@ vector is still zero, but a conv's bias makes the padding steps count. Text
 models train on the GPU with Metal or Vulkan, save and load (the mask
 included) and export to ONNX; they cannot be quantized yet. See
 [`examples/text_classification.py`](examples/text_classification.py).
+
+The `Tokenizer` lower-cases texts and turns ASCII punctuation into spaces,
+but knows nothing of HTML: scraped text such as IMDB reviews would give words
+like `br` (from `<br />`) and `amp` (from `&amp;`). `preprocess=strip_html`
+removes tags, comments and scripts and decodes entities first; any function
+from text to text works there (`to_json` saves `strip_html` by name, and your
+own function is passed to `from_json` again).
+
+#### Pre-trained word vectors (GloVe, word2vec, fastText)
+
+`load_word_vectors` reads a vector file in text format (GloVe, or word2vec and
+fastText `.vec` with their header line; `.gz` is fine) and keeps the vectors of
+your vocabulary, row `i` for word id `i`. Give them to the `Embedding` with
+`weights=`; `trainable=False` keeps them fixed while the layers above learn:
+
+```python
+from pyann import Tokenizer, load_word_vectors, strip_html
+
+tok = Tokenizer(num_words=20000, oov_token="<unk>", preprocess=strip_html).fit_on_texts(train_texts)
+matrix, found = load_word_vectors("glove.6B.100d.txt", tok)     # (tok.vocab_size, 100)
+print(f"{found} of {tok.vocab_size - 2} words have vectors")    # the rest are zeros (or missing="random")
+
+model = Sequential([
+    Embedding(tok.vocab_size, 100, mask_zero=True, input_length=200, weights=matrix, trainable=False),
+    Conv1D(128, 5, padding='same', activation='relu'),
+    GlobalMaxPooling1D(),
+    Dense(2, activation='softmax'),
+])
+model.compile(optimizer='adam', loss='cce')
+model.fit(x, y, epochs=5)
+
+model.set_trainable(0, True)            # then fine-tune the vectors a little
+model.compile(learning_rate=1e-4)
+model.fit(x, y, epochs=2)
+```
+
+The words must match the file's (GloVe's are lower case, as the Tokenizer's
+are by default). The binary word2vec format isn't read; convert it to text
+first, e.g. with gensim's `save_word2vec_format(path, binary=False)`.
+
+### Layer Weights and Freezing
+
+Every layer's parameters can be read and set as NumPy arrays, to copy layers
+between models, start from pre-trained values, or inspect what was learned:
+
+```python
+emb_vectors = model.get_layer_weights(0)[0]            # (vocab, dim): row i is id i's vector
+np.save("vectors.npy", emb_vectors)                    # keep them on their own
+
+other.set_layer_weights(0, [np.load("vectors.npy")])   # into another model with the same vocabulary
+other.set_trainable(0, False)                          # freeze it while the rest trains
+
+clone.set_weights(model.get_weights())                 # every layer (same architecture)
+```
+
+`model.layers` lists the layers after the input; a layer is chosen by its
+position there (negative counts from the end) or by the layer object itself.
+The arrays are float32 copies in PyTorch's layouts:
+
+| Layer | Arrays |
+|---|---|
+| `Dense` | weights `(units, inputs)`, bias `(units,)` (Keras stores the weights transposed) |
+| `Conv2D`, `DepthwiseConv2D` | weights `(filters, channels / groups, kh, kw)`, bias `(filters,)` |
+| `Conv1D` | weights `(filters, channels / groups, kernel_size)`, bias `(filters,)` |
+| `BatchNormalization` | gamma, beta, running mean, running variance, each `(channels,)` |
+| `Embedding` | vectors `(input_dim, output_dim)` |
+| others | none (`[]`) |
+
+Before the first `fit()` the weights are already initialized, and are what
+training starts from; values you set are kept as the starting point (layers you
+didn't set are still initialized randomly). Shapes and finiteness are checked
+before anything changes, and a model on the GPU gets the new values too.
+
+A frozen layer (`set_trainable(layer, False)`) keeps its parameters through
+`fit()` and `train_on_batch()`, on the CPU or a GPU; gradients still pass
+through it to the layers below, and a frozen `BatchNormalization` still
+updates its running statistics. `summary()` marks frozen layers. Freezing is
+not saved with the model.
 
 ### Autoencoders and Denoising
 
@@ -621,6 +699,10 @@ Methods:
 - `input_noise` - The noise setting as `(noise, amount, clip)`, or `None`
 - `apply_input_noise(x)` - A copy of `x` with the input noise applied
 - `summary()` - Get model summary
+- `layers` - The layers after the input, in order
+- `get_layer_weights(layer)` / `set_layer_weights(layer, weights)` - One layer's parameters as NumPy arrays; see [Layer Weights and Freezing](#layer-weights-and-freezing)
+- `get_weights()` / `set_weights(weights)` - Every layer's parameters, one list
+- `set_trainable(layer, trainable=True)` / `is_trainable(layer)` - Freeze a layer, or let it train again
 
 ### QuantizedModel
 
@@ -671,7 +753,8 @@ MaxPool2D(pool_size=2, strides=None, name=None)  # strides default to pool_size;
 Flatten(name=None)                               # optional: Dense layers read image outputs as vectors
 UpSample2D(size=2, name=None)                    # nearest-neighbour: (C, H, W) -> (C, H*size, W*size); alias UpSampling2D
 Reshape(target_shape, name=None)                 # same values as (channels, height, width), e.g. after a Dense layer
-Embedding(input_dim, output_dim, padding_idx=None, mask_padding=False, mask_zero=False, input_length=None, name=None)
+Embedding(input_dim, output_dim, padding_idx=None, mask_padding=False, mask_zero=False, input_length=None, name=None,
+          weights=None, trainable=True)
 GlobalMaxPooling2D(name=None)                    # each channel's largest value; aliases GlobalMaxPooling1D, GlobalMaxPool2D/1D
 GlobalAveragePooling2D(name=None)                # each channel's mean; aliases GlobalAveragePooling1D, GlobalAvgPool2D
 ```
@@ -688,13 +771,32 @@ GlobalAveragePooling2D(name=None)                # each channel's mean; aliases 
 - `input_dim`, `output_dim`: an embedding's vocabulary size (ids `0 .. input_dim - 1`)
   and vector length; `padding_idx` pads texts (its vector stays zero);
   `mask_padding` leaves those steps out of the layers above, and `mask_zero`
-  means both with padding id 0.
+  means both with padding id 0; `weights` gives starting vectors
+  `(input_dim, output_dim)` (e.g. from `load_word_vectors`), and
+  `trainable=False` keeps them fixed.
 - `name`: optional label for the layer.
 
 `Conv2D` uses square kernels; `padding` is an int, `'valid'` (0) or `'same'`
 (keeps the size; odd kernel sizes with stride 1). Output size is
 `(size + 2 * padding - kernel_size) // strides + 1`. A model whose layers
 don't fit together raises `NetworkError` when it is built.
+
+### Text
+
+```python
+Tokenizer(num_words=None, oov_token=None, lower=True, filters=..., split=None, char_level=False, preprocess=None)
+pad_sequences(sequences, maxlen=None, padding='post', truncating='post', value=0)
+strip_html(text)                                 # tags, comments and scripts removed, entities decoded
+load_word_vectors(path, word_index, vocab_size=None, dim=None, missing='zeros', seed=None, padding_idx=0)
+```
+
+- `Tokenizer`: `fit_on_texts(texts)`, `texts_to_sequences(texts)`,
+  `sequences_to_texts(seqs)`, `vocab_size` (the Embedding's `input_dim`),
+  `word_index`, `to_json()` / `Tokenizer.from_json(text, preprocess=None)`.
+- `load_word_vectors` returns `(matrix, found)`: a float32 `(vocab_size, dim)`
+  array and how many words had vectors. `word_index` is a fitted `Tokenizer`
+  or a dict; `missing='random'` draws the absent words' vectors from the
+  found ones' mean and standard deviation.
 
 ### Optimizers
 

@@ -1,7 +1,7 @@
 """Layer definitions for neural networks."""
 
-from typing import Optional, Union, Tuple
-from dataclasses import dataclass
+from typing import Any, Optional, Union, Tuple
+from dataclasses import dataclass, field
 
 from pyann.activations import Activation, parse_activation
 
@@ -560,9 +560,16 @@ class Embedding(Layer):
         input_length: Ids per sample; sets the model's input shape
             (input_length,) when this is the first layer
         name: Optional layer name
+        weights: Starting vectors, an (input_dim, output_dim) array whose row
+            i is id i's vector, e.g. pre-trained GloVe or word2vec vectors
+            from ``pyann.text.load_word_vectors``; None starts them random
+        trainable: False keeps the vectors as they are while the rest of the
+            model trains (see ``Sequential.set_trainable``)
         
     Example:
         >>> Embedding(10000, 64, mask_zero=True, input_length=200)
+        >>> matrix, found = load_word_vectors("glove.6B.100d.txt", tok)
+        >>> Embedding(tok.vocab_size, 100, mask_zero=True, weights=matrix, trainable=False)
     """
     input_dim: int
     output_dim: int
@@ -571,6 +578,8 @@ class Embedding(Layer):
     mask_zero: bool = False
     input_length: Optional[int] = None
     name: Optional[str] = None
+    weights: Any = field(default=None, repr=False, compare=False)
+    trainable: bool = True
 
     def __post_init__(self):
         for name in ("input_dim", "output_dim"):
@@ -589,6 +598,17 @@ class Embedding(Layer):
         if self.input_length is not None and (not isinstance(self.input_length, int) or
                                               isinstance(self.input_length, bool) or self.input_length <= 0):
             raise ValueError(f"input_length must be a positive int, got {self.input_length!r}")
+        if self.weights is not None:
+            from pyann.utils.compat import has_numpy
+            if not has_numpy():
+                raise RuntimeError("Embedding weights need NumPy")
+            import numpy as np
+            self.weights = np.array(self.weights, dtype=np.float32)
+            if self.weights.shape != (self.input_dim, self.output_dim):
+                raise ValueError(f"weights must have shape (input_dim, output_dim) = "
+                                 f"{(self.input_dim, self.output_dim)}, got {self.weights.shape}")
+            if not np.isfinite(self.weights).all():
+                raise ValueError("weights must be finite (no NaN or infinity)")
 
     @property
     def input_shape(self) -> Optional[Tuple[int]]:
