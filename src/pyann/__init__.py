@@ -22,7 +22,7 @@ from pyann.core.layers import (
     GlobalAveragePooling1D, GlobalMaxPooling2D, GlobalMaxPooling1D, GlobalMaxPool2D, GlobalMaxPool1D,
     Embedding,
 )
-from pyann.text import Tokenizer, pad_sequences
+from pyann.text import Tokenizer, pad_sequences, strip_html, load_word_vectors
 from pyann.optimizers import Optimizer, SGD, Momentum, RMSProp, AdaGrad, Adam
 from pyann.losses import Loss
 from pyann.activations import Activation
@@ -64,6 +64,8 @@ __all__ = [
     "Embedding",
     "Tokenizer",
     "pad_sequences",
+    "strip_html",
+    "load_word_vectors",
     "Optimizer",
     "SGD",
     "Momentum",

@@ -233,6 +233,12 @@ int ann_get_layer_settings(const PNetwork pnet, int layer_index, int *size, int 
 int ann_get_layer_window(const PNetwork pnet, int layer, int *kernel_h, int *kernel_w, int *stride_h, int *stride_w, int *padding_h, int *padding_w);
 int ann_get_layer_groups(const PNetwork pnet, int layer);
 int ann_get_layer_masked(const PNetwork pnet, int layer);
+int ann_get_layer_param_count(const PNetwork pnet, int layer);
+int ann_get_layer_param_shape(const PNetwork pnet, int layer, int index, int *rows, int *cols);
+int ann_get_layer_param(const PNetwork pnet, int layer, int index, real *values, int count);
+int ann_set_layer_param(PNetwork pnet, int layer, int index, const real *values, int count);
+int ann_set_layer_trainable(PNetwork pnet, int layer, int trainable);
+int ann_get_layer_trainable(const PNetwork pnet, int layer);
 
 // Confusion matrix
 real ann_confusion_matrix(PNetwork pnet, PTensor inputs, PTensor outputs, int *tp, int *fp, int *tn, int *fn);

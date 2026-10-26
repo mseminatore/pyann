@@ -345,6 +345,14 @@ class Sequential:
                     raise InvalidParameterError(f"Unsupported layer type {type(layer).__name__}")
                 raise_for_error_code(result, f"Failed to add layer {i} ({type(layer).__name__})")
                 
+                if isinstance(layer, Embedding):
+                    if layer.weights is not None:
+                        w = layer.weights
+                        raise_for_error_code(lib.ann_set_layer_param(self._ptr, i + 1, 0, ffi.cast("real *", w.ctypes.data),
+                                                                     w.size), "Failed to set the Embedding's weights")
+                    if not layer.trainable:
+                        lib.ann_set_layer_trainable(self._ptr, i + 1, 0)
+                
                 # Set dropout if specified
                 if getattr(layer, "dropout", 0.0) > 0:
                     lib.ann_set_layer_dropout(self._ptr, i + 1, layer.dropout)
@@ -792,6 +800,165 @@ class Sequential:
             raise InvalidParameterError("Data shape does not match the model's input and output sizes")
         return loss
     
+    @property
+    def layers(self) -> List[Layer]:
+        """The model's layers after the input, in order. Their positions (or
+        the layers themselves) select a layer in get_layer_weights,
+        set_layer_weights, set_trainable and is_trainable."""
+        return list(self._layers)
+
+    def _layer_index(self, layer: Union[int, Layer]) -> int:
+        """libann's index of a layer, given as a position in ``layers`` (negative
+        counts from the end) or as the layer itself."""
+        if isinstance(layer, Layer):
+            for i, own in enumerate(self._layers):
+                if own is layer:
+                    return i + 1
+            raise InvalidParameterError(f"this {type(layer).__name__} is not a layer of the model")
+        if not isinstance(layer, int) or isinstance(layer, bool):
+            raise TypeError(f"layer must be an int index or a Layer, got {type(layer).__name__}")
+        n = len(self._layers)
+        if not -n <= layer < n:
+            raise IndexError(f"layer index {layer} is out of range for a model with {n} layers")
+        return layer % n + 1
+
+    def _param_shape(self, index: int, param: int, rows: int, cols: int) -> Tuple[int, ...]:
+        """A parameter's array shape: libann keeps each as a [rows x cols] matrix."""
+        layer = self._layers[index - 1]
+        if isinstance(layer, (Dense, Embedding)) and param == 0:
+            return (rows, cols)
+        if isinstance(layer, _ConvBase) and param == 0:
+            win = ffi.new("int[6]")
+            lib.ann_get_layer_window(self._ptr, index, win, win + 1, win + 2, win + 3, win + 4, win + 5)
+            kh, kw = win[0], win[1]
+            if isinstance(layer, Conv1D):
+                return (rows, cols // kw, kw)
+            return (rows, cols // (kh * kw), kh, kw)
+        return (cols,)
+
+    def get_layer_weights(self, layer: Union[int, Layer]) -> List["np.ndarray"]:
+        """A layer's parameters as float32 arrays (copies), in libann's order.
+
+        Dense: weights (units, inputs) and bias (units,), the layout of
+        PyTorch's nn.Linear (Keras stores the transpose). Conv2D and
+        DepthwiseConv2D: weights (filters, channels / groups, kh, kw) and bias
+        (filters,); Conv1D: weights (filters, channels / groups, k) and bias.
+        BatchNormalization: gamma, beta, running mean and running variance,
+        each (channels,). Embedding: the vectors (input_dim, output_dim).
+        Other layers have none ([]).
+
+        Before the first training (and without set_layer_weights or a load)
+        the values are the ones the layer was created with: zero weights.
+
+        Args:
+            layer: Position in ``model.layers`` (negative counts from the
+                end), or the layer itself
+        """
+        import numpy as np
+        self._build()
+        index = self._layer_index(layer)
+        dims = ffi.new("int[2]")
+        weights = []
+        for p in range(lib.ann_get_layer_param_count(self._ptr, index)):
+            raise_for_error_code(lib.ann_get_layer_param_shape(self._ptr, index, p, dims, dims + 1),
+                                 "Failed to read a parameter's shape")
+            values = np.empty(dims[0] * dims[1], dtype=np.float32)
+            raise_for_error_code(lib.ann_get_layer_param(self._ptr, index, p, ffi.cast("real *", values.ctypes.data),
+                                                         values.size), "Failed to read a parameter")
+            weights.append(values.reshape(self._param_shape(index, p, dims[0], dims[1])))
+        return weights
+
+    def set_layer_weights(self, layer: Union[int, Layer], weights: List[ArrayLike]) -> "Sequential":
+        """Set a layer's parameters, e.g. pre-trained embedding vectors or a
+        layer of another model, as get_layer_weights returns them (same
+        number of arrays and shapes).
+
+        Training then starts from these values (other layers are still
+        initialized randomly), and a model on the GPU gets them too. To keep
+        them fixed while the rest trains, see set_trainable.
+
+        Args:
+            layer: Position in ``model.layers``, or the layer itself
+            weights: One array per parameter
+
+        Returns:
+            self for method chaining
+        """
+        import numpy as np
+        current = self.get_layer_weights(layer)
+        index = self._layer_index(layer)
+        name = type(self._layers[index - 1]).__name__
+        if len(weights) != len(current):
+            raise ValueError(f"{name} has {len(current)} parameter arrays, got {len(weights)}")
+        arrays = []
+        for p, (w, old) in enumerate(zip(weights, current)):
+            w = np.ascontiguousarray(w, dtype=np.float32)
+            if w.shape != old.shape:
+                raise ValueError(f"{name} parameter {p} has shape {old.shape}, got {w.shape}")
+            if not np.isfinite(w).all():
+                raise ValueError(f"{name} parameter {p} has values that are NaN or infinite")
+            arrays.append(w)
+        for p, w in enumerate(arrays):
+            raise_for_error_code(lib.ann_set_layer_param(self._ptr, index, p, ffi.cast("real *", w.ctypes.data),
+                                                         w.size), f"Failed to set {name} parameter {p}")
+        return self
+
+    def get_weights(self) -> List["np.ndarray"]:
+        """Every layer's parameters, one list in layer order (as Keras's
+        get_weights; see get_layer_weights for the shapes)."""
+        self._build()
+        return [w for i in range(len(self._layers)) for w in self.get_layer_weights(i)]
+
+    def set_weights(self, weights: List[ArrayLike]) -> "Sequential":
+        """Set every layer's parameters from a list like get_weights returns,
+        e.g. another model's with the same layers.
+
+        Returns:
+            self for method chaining
+        """
+        self._build()
+        counts = [lib.ann_get_layer_param_count(self._ptr, i + 1) for i in range(len(self._layers))]
+        if len(weights) != sum(counts):
+            raise ValueError(f"the model has {sum(counts)} parameter arrays, got {len(weights)}")
+        # check every shape before changing anything
+        import numpy as np
+        for p, (w, old) in enumerate(zip(weights, self.get_weights())):
+            if np.shape(w) != old.shape:
+                raise ValueError(f"weights[{p}] has shape {np.shape(w)}, expected {old.shape}")
+        start = 0
+        for i, n in enumerate(counts):
+            if n:
+                self.set_layer_weights(i, weights[start:start + n])
+            start += n
+        return self
+
+    def set_trainable(self, layer: Union[int, Layer], trainable: bool = True) -> "Sequential":
+        """Freeze a layer (trainable=False) or let it train again.
+
+        Training (fit or train_on_batch, on the CPU or a GPU) leaves a frozen
+        layer's parameters as they are, while gradients still pass through it
+        to the layers below; a frozen BatchNormalization still updates its
+        running statistics. Typical use: keep pre-trained embedding vectors
+        fixed while the layers above learn, then unfreeze them and train a
+        little more at a low learning rate. Not saved with the model.
+
+        Args:
+            layer: Position in ``model.layers``, or the layer itself
+            trainable: False to freeze the layer
+
+        Returns:
+            self for method chaining
+        """
+        self._build()
+        raise_for_error_code(lib.ann_set_layer_trainable(self._ptr, self._layer_index(layer), int(bool(trainable))),
+                             "Failed to set whether the layer trains")
+        return self
+
+    def is_trainable(self, layer: Union[int, Layer]) -> bool:
+        """False if the layer is frozen (see set_trainable)."""
+        self._build()
+        return bool(lib.ann_get_layer_trainable(self._ptr, self._layer_index(layer)))
+
     def save(self, filepath: Union[str, Path], format: str = "text") -> None:
         """Save the model to a file.
         
@@ -1230,7 +1397,7 @@ class Sequential:
         shapes = self._layer_shapes() if self._input_shape and self._layers else []
         in_channels = (self._image_input_shape() or (0,))[0]
         in_height = (self._image_input_shape() or (0, 0))[1]
-        for layer, internal_shape, params in shapes:
+        for i, (layer, internal_shape, params) in enumerate(shapes):
             shape = self._public_shape(internal_shape)
             total_params += params
             if isinstance(layer, Dense):
@@ -1269,6 +1436,10 @@ class Sequential:
                 text = f"BatchNormalization({_activation_name(layer)}) -> {shape}"
             else:
                 text = f"Flatten -> {shape}"
+            frozen = (not lib.ann_get_layer_trainable(self._ptr, i + 1) if self._built
+                      else not getattr(layer, "trainable", True))
+            if params and frozen:
+                text += " (frozen)"
             lines.append(f"{text} - {params:,} params" if params else text)
             in_channels = internal_shape[0]
             in_height = internal_shape[1] if len(internal_shape) == 3 else 0
