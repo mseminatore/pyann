@@ -7,6 +7,7 @@ from pyann._bindings.ffi import ffi, lib, gpu_enabled
 from pyann.core.layers import (
     Layer, Dense, Input, Conv2D, MaxPool2D, Flatten, UpSample2D, Reshape,
     GlobalAveragePooling2D, BatchNormalization, DepthwiseConv2D, Conv1D, MaxPool1D, parse_layer,
+    Embedding, GlobalMaxPooling2D,
 )
 from pyann.core.layers import _ConvBase, _PoolBase
 from pyann.core.tensor import Tensor
@@ -110,7 +111,7 @@ def as_images(rows: ArrayLike, output_shape: Optional[Tuple[int, ...]]) -> Array
 
 # layers that need an image (channels, height, width) input, and those that
 # read a sequence (channels, steps): an image one row high
-_IMAGE_LAYERS = (_ConvBase, _PoolBase, UpSample2D, GlobalAveragePooling2D)
+_IMAGE_LAYERS = (_ConvBase, _PoolBase, UpSample2D, GlobalAveragePooling2D, GlobalMaxPooling2D)
 _SEQUENCE_LAYERS = (Conv1D, MaxPool1D)
 
 
@@ -191,7 +192,7 @@ class Sequential:
             if self._input_shape is not None:
                 raise InvalidParameterError("Input shape already set")
             self._input_shape = layer.shape
-        elif isinstance(layer, (Dense, Conv2D, Conv1D)):
+        elif isinstance(layer, (Dense, Conv2D, Conv1D, Embedding)):
             if layer.input_shape is not None:
                 if self._input_shape is not None and len(self._layers) > 0:
                     raise InvalidParameterError("Input shape already set")
@@ -334,6 +335,12 @@ class Sequential:
                     result = lib.ann_add_global_avgpool2d(self._ptr)
                 elif isinstance(layer, BatchNormalization):
                     result = lib.ann_add_batchnorm(self._ptr, layer.activation_type)
+                elif isinstance(layer, Embedding):
+                    add = lib.ann_add_embedding_masked if layer.mask_padding else lib.ann_add_embedding
+                    padding = -1 if layer.padding_idx is None else layer.padding_idx
+                    result = add(self._ptr, layer.input_dim, layer.output_dim, padding)
+                elif isinstance(layer, GlobalMaxPooling2D):
+                    result = lib.ann_add_global_maxpool2d(self._ptr)
                 else:
                     raise InvalidParameterError(f"Unsupported layer type {type(layer).__name__}")
                 raise_for_error_code(result, f"Failed to add layer {i} ({type(layer).__name__})")
@@ -351,10 +358,10 @@ class Sequential:
         self._built = True
     
     def _first_image_layer(self) -> Optional[Layer]:
-        """The first layer that needs an image input, unless a Reshape makes
-        an image of its own before it."""
+        """The first layer that needs an image input, unless a Reshape or an
+        Embedding makes an image (or sequence) of its own before it."""
         for layer in self._layers:
-            if isinstance(layer, Reshape):
+            if isinstance(layer, (Reshape, Embedding)):
                 return None
             if isinstance(layer, _IMAGE_LAYERS):
                 return layer
@@ -367,8 +374,11 @@ class Sequential:
         return self._first_image_layer() is not None
 
     def _is_sequence(self) -> bool:
-        """Whether the input is a sequence (channels, steps): a 2-D input
-        shape read first by a Conv1D or MaxPool1D layer."""
+        """Whether the model works on sequences (channels, steps): a 2-D
+        input shape read first by a Conv1D or MaxPool1D layer, or an
+        Embedding, which makes a sequence of its ids."""
+        if any(isinstance(layer, Embedding) for layer in self._layers):
+            return True
         shape = self._input_shape
         return shape is not None and len(shape) == 2 and isinstance(self._first_image_layer(), _SEQUENCE_LAYERS)
 
@@ -383,7 +393,8 @@ class Sequential:
         shape = self._input_shape
         if shape is not None and len(shape) == 3:
             return tuple(shape)
-        if shape is not None and len(shape) == 2 and self._is_sequence():
+        if shape is not None and len(shape) == 2 and self._is_sequence() and \
+                isinstance(self._first_image_layer(), _SEQUENCE_LAYERS):
             return (shape[0], 1, shape[1])
         if shape is not None and len(shape) == 2 and self._uses_images():
             return (1, shape[0], shape[1])
@@ -425,6 +436,12 @@ class Sequential:
                 # gamma and beta, plus the running mean and variance, per channel
                 new_shape = shape
                 params = 4 * shape[0]
+            elif isinstance(layer, Embedding):
+                if len(shape) != 1:
+                    raise NetworkError(f"Layer {i} (Embedding) needs a flat input of token ids, but the layer "
+                                       f"before outputs {shape}")
+                new_shape = layer.output_shape(shape)
+                params = layer.param_count()
             elif isinstance(layer, _IMAGE_LAYERS):
                 if len(shape) != 3:
                     raise NetworkError(f"Layer {i} ({name}) needs an image input, but the layer before outputs {shape}")
@@ -867,6 +884,13 @@ class Sequential:
                 layers.append(GlobalAveragePooling2D())
             elif kind == lib.LAYER_KIND_BATCHNORM:
                 layers.append(BatchNormalization(activation=activation))
+            elif kind == lib.LAYER_KIND_EMBEDDING:
+                # settings: the vocabulary and the padding id (-1 for none)
+                padding = settings[2] if settings[2] >= 0 else None
+                layers.append(Embedding(settings[0], channels, padding_idx=padding,
+                                        mask_padding=bool(lib.ann_get_layer_masked(ptr, i))))
+            elif kind == lib.LAYER_KIND_GLOBAL_MAXPOOL2D:
+                layers.append(GlobalMaxPooling2D())
             else:
                 lib.ann_free_network(ptr)
                 raise NetworkError(f"{filepath} contains layer types pyann does not support yet")
@@ -947,8 +971,9 @@ class Sequential:
         ptr = lib.ann_quantize(self._ptr, x_tensor._ptr)
         if ptr == ffi.NULL:
             raise NetworkError(c_error_message(
-                "Quantization failed (softmax is supported only on the output layer, and each "
-                "BatchNormalization must follow a Dense or Conv2D layer without an activation)"))
+                "Quantization failed (softmax is supported only on the output layer, each "
+                "BatchNormalization must follow a Dense or Conv2D layer without an activation, and "
+                "models with an Embedding cannot be quantized yet)"))
         output_size = lib.ann_get_layer_nodes(self._ptr, lib.ann_get_layer_count(self._ptr) - 1)
         return QuantizedModel(ptr, self._input_shape, input_size, output_size, self._output_shape())
 
@@ -1204,6 +1229,7 @@ class Sequential:
         total_params = 0
         shapes = self._layer_shapes() if self._input_shape and self._layers else []
         in_channels = (self._image_input_shape() or (0,))[0]
+        in_height = (self._image_input_shape() or (0, 0))[1]
         for layer, internal_shape, params in shapes:
             shape = self._public_shape(internal_shape)
             total_params += params
@@ -1230,14 +1256,22 @@ class Sequential:
                 text = f"UpSample2D({layer.size}x) -> {shape}"
             elif isinstance(layer, Reshape):
                 text = f"Reshape -> {shape}"
-            elif isinstance(layer, GlobalAveragePooling2D):
-                text = f"GlobalAveragePooling2D -> {shape}"
+            elif isinstance(layer, (GlobalAveragePooling2D, GlobalMaxPooling2D)):
+                # named for what it pools: a sequence's steps (1D) or an image (2D)
+                kind = "Average" if isinstance(layer, GlobalAveragePooling2D) else "Max"
+                dims = "1D" if self._is_sequence() and in_height == 1 else "2D"
+                text = f"Global{kind}Pooling{dims} -> {shape}"
+            elif isinstance(layer, Embedding):
+                padding = "" if layer.padding_idx is None else f", padding {layer.padding_idx}"
+                masked = ", masked" if layer.mask_padding else ""
+                text = f"Embedding({layer.input_dim}, {layer.output_dim}{padding}{masked}) -> {shape}"
             elif isinstance(layer, BatchNormalization):
                 text = f"BatchNormalization({_activation_name(layer)}) -> {shape}"
             else:
                 text = f"Flatten -> {shape}"
             lines.append(f"{text} - {params:,} params" if params else text)
             in_channels = internal_shape[0]
+            in_height = internal_shape[1] if len(internal_shape) == 3 else 0
         
         lines.append("=" * 50)
         lines.append(f"Total parameters: {total_params:,}")

@@ -82,6 +82,11 @@ class TestStandaloneExamples:
         assert (tmp_path / "activity_deploy" / "activity_q.h").exists()
         assert (tmp_path / "activity_deploy" / "ann_rt.h").exists()
 
+    def test_text_classification(self, tmp_path):
+        out = run_example("text_classification.py", "-e", "2", "--samples", "200", cwd=tmp_path)
+        assert "Reloaded model and tokenizer" in out
+        assert "ONNX round trip predicts the same: yes" in out
+
     def test_online_learning(self, tmp_path):
         out = run_example("online_learning.py", "--batches", "40", cwd=tmp_path)
         assert "saved and reloaded" in out

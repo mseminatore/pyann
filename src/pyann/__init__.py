@@ -19,7 +19,10 @@ from pyann.core.layers import (
     Dense, Input, Conv2D, MaxPool2D, MaxPooling2D, Flatten, UpSample2D, UpSampling2D, Reshape,
     GlobalAveragePooling2D, GlobalAvgPool2D, BatchNormalization, BatchNorm,
     DepthwiseConv2D, Conv1D, MaxPool1D, MaxPooling1D,
+    GlobalAveragePooling1D, GlobalMaxPooling2D, GlobalMaxPooling1D, GlobalMaxPool2D, GlobalMaxPool1D,
+    Embedding,
 )
+from pyann.text import Tokenizer, pad_sequences
 from pyann.optimizers import Optimizer, SGD, Momentum, RMSProp, AdaGrad, Adam
 from pyann.losses import Loss
 from pyann.activations import Activation
@@ -53,6 +56,14 @@ __all__ = [
     "Conv1D",
     "MaxPool1D",
     "MaxPooling1D",
+    "GlobalAveragePooling1D",
+    "GlobalMaxPooling2D",
+    "GlobalMaxPooling1D",
+    "GlobalMaxPool2D",
+    "GlobalMaxPool1D",
+    "Embedding",
+    "Tokenizer",
+    "pad_sequences",
     "Optimizer",
     "SGD",
     "Momentum",

@@ -501,6 +501,107 @@ class GlobalAveragePooling2D(Layer):
 #: Short alias
 GlobalAvgPool2D = GlobalAveragePooling2D
 
+#: Keras-style alias for sequences (channels, steps): the mean over the steps
+GlobalAveragePooling1D = GlobalAveragePooling2D
+
+
+@dataclass
+class GlobalMaxPooling2D(Layer):
+    """Global max pooling: each channel's largest value over height and width.
+    
+    The output is a vector of one value per channel, so a Dense layer can
+    follow directly. Over a sequence (channels, steps) it keeps each
+    feature's strongest response wherever it occurs, the usual pooling for
+    text after an Embedding and Conv1D layers. Over a masked sequence (see
+    Embedding) only the kept steps count. Maps to an ONNX GlobalMaxPool node.
+    
+    Args:
+        name: Optional layer name
+    """
+    name: Optional[str] = None
+
+    def output_shape(self, input_shape: Tuple[int, int, int]) -> Tuple[int]:
+        """Output (channels,) for an input of the given shape."""
+        return (input_shape[0],)
+
+
+#: Aliases: Keras's 1-D name (over the steps of a sequence) and short names
+GlobalMaxPooling1D = GlobalMaxPooling2D
+GlobalMaxPool2D = GlobalMaxPooling2D
+GlobalMaxPool1D = GlobalMaxPooling2D
+
+
+@dataclass
+class Embedding(Layer):
+    """Token ids to learned vectors: the first layer of a text model.
+    
+    Each sample is a row of ``input_length`` token ids (integers in
+    ``[0, input_dim)``, e.g. from ``pyann.text.Tokenizer`` and
+    ``pad_sequences``). The output is the sequence (output_dim, input_length),
+    channels-first as for Conv1D, so Conv1D, MaxPool1D, BatchNormalization
+    and the global pooling layers follow directly. Vectors start N(0, 1), as
+    in PyTorch's nn.Embedding.
+    
+    ``padding_idx`` (as in PyTorch) is the id that pads texts to the same
+    length: its vector is always zero and never trained; ids outside the
+    vocabulary also give zeros. With ``mask_padding`` (or Keras's
+    ``mask_zero``, which makes 0 the padding id) the padding steps are also
+    left out of the layers above: Conv1D, MaxPool1D and BatchNormalization
+    outputs are zero there, batch norm statistics and global pooling skip
+    them, so a text padded at the end gives what it would unpadded.
+    
+    Args:
+        input_dim: Vocabulary size (number of token ids)
+        output_dim: Length of each vector
+        padding_idx: Id that pads texts, or None
+        mask_padding: Leave the padding steps out of the layers above
+            (needs padding_idx)
+        mask_zero: Keras's flag: padding_idx = 0 and mask_padding
+        input_length: Ids per sample; sets the model's input shape
+            (input_length,) when this is the first layer
+        name: Optional layer name
+        
+    Example:
+        >>> Embedding(10000, 64, mask_zero=True, input_length=200)
+    """
+    input_dim: int
+    output_dim: int
+    padding_idx: Optional[int] = None
+    mask_padding: bool = False
+    mask_zero: bool = False
+    input_length: Optional[int] = None
+    name: Optional[str] = None
+
+    def __post_init__(self):
+        for name in ("input_dim", "output_dim"):
+            v = getattr(self, name)
+            if not isinstance(v, int) or isinstance(v, bool) or v <= 0:
+                raise ValueError(f"{name} must be a positive int, got {v!r}")
+        if self.mask_zero:
+            if self.padding_idx not in (None, 0):
+                raise ValueError(f"mask_zero makes 0 the padding id, but padding_idx is {self.padding_idx}")
+            self.padding_idx, self.mask_padding = 0, True
+        if self.padding_idx is not None and (not isinstance(self.padding_idx, int) or isinstance(self.padding_idx, bool)
+                                             or not 0 <= self.padding_idx < self.input_dim):
+            raise ValueError(f"padding_idx must be None or an int in [0, {self.input_dim}), got {self.padding_idx!r}")
+        if self.mask_padding and self.padding_idx is None:
+            raise ValueError("mask_padding needs a padding_idx (or use mask_zero=True)")
+        if self.input_length is not None and (not isinstance(self.input_length, int) or
+                                              isinstance(self.input_length, bool) or self.input_length <= 0):
+            raise ValueError(f"input_length must be a positive int, got {self.input_length!r}")
+
+    @property
+    def input_shape(self) -> Optional[Tuple[int]]:
+        """(input_length,) when given, else None."""
+        return None if self.input_length is None else (self.input_length,)
+
+    def output_shape(self, input_shape: Tuple[int, ...]) -> Tuple[int, int, int]:
+        """The sequence (output_dim, 1, steps) for a flat input of ids."""
+        return (self.output_dim, 1, input_shape[0])
+
+    def param_count(self) -> int:
+        return self.input_dim * self.output_dim
+
 
 @dataclass
 class BatchNormalization(Layer):

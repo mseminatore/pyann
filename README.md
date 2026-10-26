@@ -5,7 +5,7 @@ Python wrapper for the [libann](https://github.com/mseminatore/ann) neural netwo
 ## Features
 
 - **Keras-style API**: Familiar `Sequential` model with `add()`, `fit()`, `predict()`
-- **Layers**: Dense, plus Conv2D (any window, grouped), DepthwiseConv2D, MaxPool2D, GlobalAveragePooling2D, BatchNormalization and Flatten for convolutional networks, Conv1D and MaxPool1D for sequences such as time series, and UpSample2D and Reshape for decoders (autoencoders)
+- **Layers**: Dense, plus Conv2D (any window, grouped), DepthwiseConv2D, MaxPool2D, GlobalAveragePooling2D, BatchNormalization and Flatten for convolutional networks, Conv1D and MaxPool1D for sequences such as time series, Embedding (with padding masks), GlobalMaxPooling1D/2D and a Tokenizer for text, and UpSample2D and Reshape for decoders (autoencoders)
 - **Input noise** for denoising autoencoders: Gaussian, masking or salt-and-pepper
 - **Multiple optimizers**: SGD, Momentum, RMSProp, AdaGrad, Adam
 - **Activation functions**: Sigmoid, ReLU, LeakyReLU, Tanh, Softsign, Softmax, GELU
@@ -262,6 +262,43 @@ A model whose output is a sequence (e.g. one that denoises signals) returns
 `(N, C, L)` from `predict()`. These layers run on the GPU with Metal or
 Vulkan, save and load, export to ONNX, quantize and export to C like the
 2-D ones; `load_onnx()` also reads PyTorch `nn.Conv1d` models.
+
+### Text
+
+`Tokenizer` builds a vocabulary and turns texts into lists of word ids
+(0 is left for padding; with an `oov_token`, 1 stands for unknown words), and
+`pad_sequences` makes them rows of one length. An `Embedding` turns each row
+of ids into a sequence of learned vectors `(dim, length)`, so `Conv1D` and the
+pooling layers follow; `GlobalMaxPooling1D` keeps each filter's strongest match
+wherever it occurs in the text:
+
+```python
+from pyann import Sequential, Embedding, Conv1D, GlobalMaxPooling1D, Dense, Tokenizer, pad_sequences
+
+tok = Tokenizer(num_words=10000, oov_token="<unk>").fit_on_texts(train_texts)
+x = pad_sequences(tok.texts_to_sequences(train_texts), maxlen=200)    # (N, 200) ids, 0-padded at the end
+
+model = Sequential([
+    Embedding(tok.vocab_size, 64, mask_zero=True, input_length=200),  # -> (64, 200)
+    Conv1D(128, 5, padding='same', activation='relu'),                # -> (128, 200): 5-word phrases
+    GlobalMaxPooling1D(),                                             # -> (128,)
+    Dense(2, activation='softmax'),
+])
+model.compile(optimizer='adam', loss='cce')
+model.fit(x, y, epochs=10, batch_size=32)
+open("tokenizer.json", "w").write(tok.to_json())   # keep it with the model: new texts need the same ids
+```
+
+`mask_zero=True` (or `padding_idx=` with `mask_padding=True`) leaves the
+padding out of everything above the embedding: `Conv1D`, `MaxPool1D` and
+`BatchNormalization` outputs are zero there, and batch norm statistics and
+global pooling skip it, so a text padded at the end gives what it would
+unpadded (`pad_sequences` pads at the end by default for this reason; padding
+at the start also works when every stride is 1). Without a mask the padding
+vector is still zero, but a conv's bias makes the padding steps count. Text
+models train on the GPU with Metal or Vulkan, save and load (the mask
+included) and export to ONNX; they cannot be quantized yet. See
+[`examples/text_classification.py`](examples/text_classification.py).
 
 ### Autoencoders and Denoising
 
@@ -634,6 +671,9 @@ MaxPool2D(pool_size=2, strides=None, name=None)  # strides default to pool_size;
 Flatten(name=None)                               # optional: Dense layers read image outputs as vectors
 UpSample2D(size=2, name=None)                    # nearest-neighbour: (C, H, W) -> (C, H*size, W*size); alias UpSampling2D
 Reshape(target_shape, name=None)                 # same values as (channels, height, width), e.g. after a Dense layer
+Embedding(input_dim, output_dim, padding_idx=None, mask_padding=False, mask_zero=False, input_length=None, name=None)
+GlobalMaxPooling2D(name=None)                    # each channel's largest value; aliases GlobalMaxPooling1D, GlobalMaxPool2D/1D
+GlobalAveragePooling2D(name=None)                # each channel's mean; aliases GlobalAveragePooling1D, GlobalAvgPool2D
 ```
 
 - `units`: number of neurons (outputs) in the layer.
@@ -645,6 +685,10 @@ Reshape(target_shape, name=None)                 # same values as (channels, hei
 - `size`: upsampling factor. Each value is repeated `size` times along height and width.
 - `target_shape`: `(channels, height, width)` to view the incoming values as.
   Its product must equal the previous layer's output size.
+- `input_dim`, `output_dim`: an embedding's vocabulary size (ids `0 .. input_dim - 1`)
+  and vector length; `padding_idx` pads texts (its vector stays zero);
+  `mask_padding` leaves those steps out of the layers above, and `mask_zero`
+  means both with padding id 0.
 - `name`: optional label for the layer.
 
 `Conv2D` uses square kernels; `padding` is an int, `'valid'` (0) or `'same'`

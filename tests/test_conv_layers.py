@@ -152,7 +152,7 @@ class TestShapes:
         assert "Conv1D(8, 5, stride 1, padding 2, linear) -> (8, 24) - 88 params" in text
         assert "MaxPool1D(2, stride 2) -> (8, 12)" in text
         assert "Conv1D(8, 3, stride 1, padding 1, 2 groups, relu) -> (8, 12) - 104 params" in text
-        assert "GlobalAveragePooling2D -> (8,)" in text
+        assert "GlobalAveragePooling1D -> (8,)" in text
 
     def test_mobilenet_summary(self):
         text = mobilenet().summary()
@@ -259,7 +259,7 @@ class TestQuantize:
         q = model.quantize(x)
         assert (q.predict(x).argmax(1) == model.predict(x).argmax(1)).mean() >= 0.95
         header = q.export_c_header(tmp_path / "waves_q.h", "waves_q", runtime=False)
-        assert "ANN_RT_VERSION < 5" in header.read_text()
+        assert "ANN_RT_VERSION < 6" in header.read_text()
 
     def test_mobilenet(self):
         x, y = bars()
