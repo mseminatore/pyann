@@ -14,7 +14,7 @@ Two models learn the same data:
   - a dense MLP on the flattened window, which has to learn every phase of
     every rhythm separately
   - a 1-D CNN: Conv1D + BatchNormalization, MaxPool1D, Conv1D, then
-    GlobalAveragePooling2D, so a pattern counts wherever it falls in the
+    GlobalAveragePooling1D, so a pattern counts wherever it falls in the
     window, with far fewer weights
 
 The CNN is then quantized to int8 for a microcontroller, exported as a C
@@ -30,7 +30,7 @@ import tempfile
 
 import numpy as np
 
-from pyann import (Sequential, Conv1D, BatchNormalization, MaxPool1D, GlobalAveragePooling2D, Dense, Flatten,
+from pyann import (Sequential, Conv1D, BatchNormalization, MaxPool1D, GlobalAveragePooling1D, Dense, Flatten,
                    Input)
 from example_data import setup_backend
 
@@ -94,7 +94,7 @@ def build_cnn() -> Sequential:
         MaxPool1D(2),                                             # -> (16, 32)
         Conv1D(24, 5, padding="same"),                            # -> (24, 32)
         BatchNormalization(activation="relu"),
-        GlobalAveragePooling2D(),                                 # -> (24,): wherever a pattern fell
+        GlobalAveragePooling1D(),                                 # -> (24,): wherever a pattern fell
         Dense(len(ACTIVITIES), activation="softmax"),
     ])
     model.compile(optimizer="adam", loss="cce", learning_rate=0.005, convergence=0.0)

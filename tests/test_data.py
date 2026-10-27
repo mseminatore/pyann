@@ -173,14 +173,42 @@ class TestLoadCsvErrors:
         with pytest.raises(ValueError, match="line 51 has 3 fields"):
             load_csv(str(path))
 
-    def test_line_too_long_for_libann(self, tmp_path):
+    def test_long_lines(self, tmp_path):
+        # 3000 values a line: more than libann's old 8192-character line buffer
         path = tmp_path / "wide.csv"
         row = ",".join(["0.5"] * 3000) + "\n"
-        path.write_text(row * 2)
-        with pytest.raises(ValueError, match="use_c_library=False"):
+        write_csv(path, row * 2)
+        for use_c in (True, False):
+            data, rows, cols = load_csv(str(path), use_c_library=use_c)
+            assert (rows, cols) == (2, 3000)
+
+    def test_libann_message_reaches_the_exception(self, tmp_path):
+        from pyann.exceptions import InvalidParameterError
+        from pyann.utils import data as data_module
+        path = tmp_path / "labels.csv"
+        write_csv(path, "1,2\n3,abc\n")
+        with pytest.raises(InvalidParameterError, match=r"line 2, value 2: \"abc\" is not a number"):
+            data_module._load_csv_c(str(path), False)
+
+    def test_quoted_numbers(self, tmp_path):
+        path = tmp_path / "quoted.csv"
+        write_csv(path, '"1","2.5"\n"3",4\n')
+        data, rows, cols = load_csv(str(path))
+        assert (rows, cols) == (2, 2) and list(data[0]) == [1.0, 2.5]
+
+    def test_memory_is_freed(self, tmp_path):
+        # each load frees libann's copy: loading a 4 MB file 100 times keeps memory flat
+        import sys
+        resource = pytest.importorskip("resource")       # not on Windows
+        scale = 1 if sys.platform == "darwin" else 1024   # ru_maxrss: bytes on macOS, KB on Linux
+        path = tmp_path / "big.csv"
+        write_csv(path, (",".join(["1"] * 1000) + "\n") * 1000)
+        load_csv(str(path))
+        before = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        for _ in range(100):
             load_csv(str(path))
-        data, rows, cols = load_csv(str(path), use_c_library=False)
-        assert (rows, cols) == (2, 3000)
+        grown = (resource.getrusage(resource.RUSAGE_SELF).ru_maxrss - before) * scale
+        assert grown < 100_000_000               # leaking would add ~400 MB
 
     def test_numbers_still_load(self, tmp_path):
         # spaces separate fields for libann, as before

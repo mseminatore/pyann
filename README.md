@@ -243,7 +243,7 @@ features per step has shape `(C, L)`, channels-first as in PyTorch's
 `x.transpose(0, 2, 1)`:
 
 ```python
-from pyann import Sequential, Conv1D, BatchNormalization, MaxPool1D, GlobalAveragePooling2D, Dense
+from pyann import Sequential, Conv1D, BatchNormalization, MaxPool1D, GlobalAveragePooling1D, Dense
 
 # x: (N, 3, 128) float32 sequences of 3 features, y: (N, 4) one-hot labels
 model = Sequential([
@@ -251,7 +251,7 @@ model = Sequential([
     BatchNormalization(activation='relu'),
     MaxPool1D(2),                                          # -> (16, 64)
     Conv1D(32, 3, padding='same', activation='relu'),      # -> (32, 64)
-    GlobalAveragePooling2D(),                              # -> (32,)
+    GlobalAveragePooling1D(),                              # -> (32,)
     Dense(4, activation='softmax'),
 ])
 model.compile(optimizer='adam', loss='cce')
