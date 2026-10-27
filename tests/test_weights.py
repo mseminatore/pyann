@@ -207,7 +207,9 @@ class TestFreezing:
         assert np.array_equal(before[0], after[0])
         assert not any(np.array_equal(a, b) for a, b in zip(before[1:], after[1:]))
 
+        assert model.layers[0].trainable is False
         model.set_trainable(model.layers[0], True)
+        assert model.layers[0].trainable is True
         model.fit(x, y, epochs=1, verbose=0)
         assert not np.array_equal(after[0], model.get_layer_weights(0)[0])
 
@@ -278,3 +280,47 @@ def test_glove_style_workflow(tmp_path):
     model.fit(x, labels, epochs=40, batch_size=8, verbose=0)
     assert model.evaluate(x, labels) == 1.0
     assert np.array_equal(model.get_layer_weights(0)[0], matrix)
+
+
+class TestWeightsFiles:
+    def test_save_and_load_weights(self, texts, tmp_path):
+        x, y = texts
+        model = text_model()
+        model.fit(x, y, epochs=2, verbose=0)
+        path = tmp_path / "w.npz"
+        model.save_weights(path)
+        assert path.exists() and not (tmp_path / "w.npz.npz").exists()
+        fresh = text_model().load_weights(path)
+        assert np.array_equal(fresh.predict(x), model.predict(x))
+        with np.load(path) as data:
+            assert list(data["layers"]) == ["Embedding", "Conv1D", "GlobalMaxPooling2D", "Dense"]
+            assert data["layer0.0"].shape == (16, 4)
+
+    def test_load_weights_checks_the_layers(self, images, tmp_path):
+        path = tmp_path / "w.npz"
+        text_model().save_weights(path)
+        model = cnn()
+        before = model.get_weights()
+        with pytest.raises(ValueError, match="holds the weights of layers"):
+            model.load_weights(path)
+        other = Sequential([
+            Embedding(16, 8, mask_zero=True, input_length=8),       # another vector length
+            Conv1D(6, 3, padding="same", groups=2, activation="relu"),
+            GlobalMaxPooling1D(),
+            Dense(2, activation="softmax"),
+        ]).compile(loss="cce")
+        with pytest.raises(ValueError, match="shape"):
+            other.load_weights(path)
+        assert all(np.array_equal(a, b) for a, b in zip(before, model.get_weights()))
+
+    def test_frozen_layers_are_saved(self, texts, tmp_path):
+        x, y = texts
+        model = text_model(trainable=False)
+        model.set_trainable(-1, False)
+        model.fit(x, y, epochs=1, verbose=0)
+        for fmt, name in (("binary", "m.nnb"), ("text", "m.nna")):
+            model.save(tmp_path / name, format=fmt)
+            back = Sequential.load(tmp_path / name, format=fmt)
+            assert not back.is_trainable(0) and back.is_trainable(1) and not back.is_trainable(-1)
+            assert back.layers[0].trainable is False
+            assert "(frozen)" in back.summary().splitlines()[3]

@@ -18,6 +18,16 @@ Timings below are from an Apple-silicon Mac (Metal GPU for the image models).
 | [`text_classification.py`](text_classification.py) | `Tokenizer` and `pad_sequences`, a masked `Embedding`, `Conv1D` and `GlobalMaxPooling1D` on synthetic reviews whose sentiment hangs on negations ("not bad"); a bag-of-words MLP for comparison; saving the tokenizer with the model; ONNX round trip | Embedding + Conv1D about 99% vs about 75% for bag of words, 3 s |
 | [`online_learning.py`](online_learning.py) | `train_on_batch()` on a stream whose labelling rule drifts; a frozen model falls to about 50% while the online one stays above 90%; save, reload and keep learning | < 1 s |
 
+## IMDB reviews
+
+Downloads the reviews (Stanford's archive, 84 MB) into `examples/data/` the first time, or takes
+Kaggle's `IMDB Dataset.csv` with `--csv`; GloVe vectors with `--download-glove` (862 MB, once) or
+`--glove FILE`.
+
+| Example | Shows | Result |
+|---|---|---|
+| [`imdb_glove.py`](imdb_glove.py) | Sentiment of 50,000 movie reviews: `load_text_csv`, `Tokenizer(preprocess=strip_html)` fitted on the training reviews only, an `Embedding` learned from scratch vs pre-trained GloVe vectors (`load_word_vectors`, `Embedding(weights=..., trainable=False)`), then fine-tuned with `set_trainable`; nearest words from `get_layer_weights`; `save_weights` / `load_weights` | 85.8% from scratch, 88.1% with frozen GloVe, 88.2% fine-tuned; about 5 min on a 4-core Intel Mac CPU |
+
 ## Fashion-MNIST
 
 | Example | Shows | Result |
