@@ -87,6 +87,27 @@ class TestStandaloneExamples:
         assert "Reloaded model and tokenizer" in out
         assert "ONNX round trip predicts the same: yes" in out
 
+    def test_imdb_glove(self, tmp_path):
+        # a tiny review CSV in the Kaggle format and a GloVe-style file, so nothing is downloaded
+        rng = np.random.default_rng(0)
+        good, bad, filler = ["great", "superb", "fun"], ["awful", "boring", "dull"], ["the", "film", "was", "plot"]
+        rows = ["review,sentiment"]
+        for i in range(400):
+            positive = i % 2 == 0
+            words = list(rng.choice(filler, 6)) + [rng.choice(good if positive else bad)]
+            rng.shuffle(words)
+            rows.append(f'"{" ".join(words)}<br /><br />",{"positive" if positive else "negative"}')
+        csv = tmp_path / "IMDB Dataset.csv"
+        csv.write_bytes(("\n".join(rows) + "\n").encode())
+        vectors = tmp_path / "vectors.txt"
+        lines = [w + " " + " ".join(f"{v:.3f}" for v in rng.normal(size=100))
+                 for w in good + bad + filler[:3]]
+        vectors.write_bytes(("\n".join(lines) + "\n").encode())
+        out = run_example("imdb_glove.py", "--csv", str(csv), "--glove", str(vectors), "-e", "1", cwd=tmp_path)
+        assert "learned from scratch:" in out and "GloVe, frozen:" in out and "GloVe, then fine-tuned:" in out
+        assert "9 of" in out                         # vectors for 9 of the vocabulary's words
+        assert "same predictions" in out
+
     def test_online_learning(self, tmp_path):
         out = run_example("online_learning.py", "--batches", "40", cwd=tmp_path)
         assert "saved and reloaded" in out

@@ -932,6 +932,49 @@ class Sequential:
             start += n
         return self
 
+    def save_weights(self, filepath: Union[str, Path]) -> None:
+        """Save every layer's parameters (get_weights) to a NumPy .npz file.
+
+        Only the values: load them with load_weights into a model built with
+        the same layers, e.g. to keep pre-trained embedding vectors apart from
+        the model that learned them. ``save()`` keeps the whole model.
+        The file holds ``layer<i>.<p>`` arrays (parameter p of model.layers[i])
+        and ``layers``, the layer class names.
+        """
+        import numpy as np
+        self._build()
+        arrays = {"layers": np.array([type(layer).__name__ for layer in self._layers])}
+        for i in range(len(self._layers)):
+            for p, w in enumerate(self.get_layer_weights(i)):
+                arrays[f"layer{i}.{p}"] = w
+        with open(filepath, "wb") as f:     # an open file, so np.savez adds no .npz to the name
+            np.savez(f, **arrays)
+
+    def load_weights(self, filepath: Union[str, Path]) -> "Sequential":
+        """Set every layer's parameters from a file save_weights wrote.
+
+        The model must have the same layers (kinds and shapes); nothing
+        changes when they differ.
+
+        Returns:
+            self for method chaining
+        """
+        import numpy as np
+        self._build()
+        keys = [f"layer{i}.{p}" for i in range(len(self._layers))
+                for p in range(lib.ann_get_layer_param_count(self._ptr, i + 1))]
+        with np.load(filepath, allow_pickle=False) as data:
+            mine = [type(layer).__name__ for layer in self._layers]
+            saved = [str(name) for name in data["layers"]] if "layers" in data.files else None
+            if saved is not None and saved != mine:
+                raise ValueError(f"{filepath} holds the weights of layers {saved}, but this model has {mine}")
+            stored = set(data.files) - {"layers"}
+            if stored != set(keys):
+                raise ValueError(f"{filepath} has the weights of another model: expected arrays {keys[:4]}..., "
+                                 f"found {sorted(stored)[:4]}...")
+            weights = [data[k] for k in keys]
+        return self.set_weights(weights)
+
     def set_trainable(self, layer: Union[int, Layer], trainable: bool = True) -> "Sequential":
         """Freeze a layer (trainable=False) or let it train again.
 
@@ -940,7 +983,9 @@ class Sequential:
         to the layers below; a frozen BatchNormalization still updates its
         running statistics. Typical use: keep pre-trained embedding vectors
         fixed while the layers above learn, then unfreeze them and train a
-        little more at a low learning rate. Not saved with the model.
+        little more at a low learning rate. Layers below the lowest one that
+        trains get no backward pass, so a frozen embedding also trains
+        faster. ``save()`` keeps the setting (ONNX export does not).
 
         Args:
             layer: Position in ``model.layers``, or the layer itself
@@ -950,8 +995,11 @@ class Sequential:
             self for method chaining
         """
         self._build()
-        raise_for_error_code(lib.ann_set_layer_trainable(self._ptr, self._layer_index(layer), int(bool(trainable))),
+        index = self._layer_index(layer)
+        raise_for_error_code(lib.ann_set_layer_trainable(self._ptr, index, int(bool(trainable))),
                              "Failed to set whether the layer trains")
+        if hasattr(self._layers[index - 1], "trainable"):     # Embedding(trainable=...) follows it
+            self._layers[index - 1].trainable = bool(trainable)
         return self
 
     def is_trainable(self, layer: Union[int, Layer]) -> bool:
@@ -1055,7 +1103,8 @@ class Sequential:
                 # settings: the vocabulary and the padding id (-1 for none)
                 padding = settings[2] if settings[2] >= 0 else None
                 layers.append(Embedding(settings[0], channels, padding_idx=padding,
-                                        mask_padding=bool(lib.ann_get_layer_masked(ptr, i))))
+                                        mask_padding=bool(lib.ann_get_layer_masked(ptr, i)),
+                                        trainable=bool(lib.ann_get_layer_trainable(ptr, i))))
             elif kind == lib.LAYER_KIND_GLOBAL_MAXPOOL2D:
                 layers.append(GlobalMaxPooling2D())
             else:
