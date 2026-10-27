@@ -4,6 +4,7 @@ import csv
 import re
 from typing import Dict, Tuple, Optional, List, Sequence, Union, TYPE_CHECKING
 from pyann.utils.compat import ArrayLike, to_array, has_numpy, is_numpy_array, HAS_NUMPY
+from pyann.exceptions import InvalidParameterError
 
 if TYPE_CHECKING:
     import numpy as np
@@ -34,22 +35,18 @@ def load_csv(
     """
     filename = str(filename)
     if use_c_library and delimiter == ",":
-        # libann reads a word as 0, so look at the first rows here
-        _check_numeric(filename, has_header, None, max_rows=_CHECK_ROWS)
         try:
             return _load_csv_c(filename, has_header)
-        except Exception:
-            _check_numeric(filename, has_header, None)    # the line at fault, if it is one
+        except InvalidParameterError:
+            # a value that isn't a number or a ragged row: libann's error names the
+            # line too, and this adds what to do about it
+            _check_numeric(filename, has_header, None)
             raise
     return _load_csv_python(filename, has_header, delimiter)
 
 
-# rows load_csv checks before handing a file to libann, which reads words as 0
-_CHECK_ROWS = 20
-# libann's ann_load_csv splits fields at commas and spaces, and reads lines of
-# up to this many characters with their line break (its DEFAULT_BUFFER_SIZE less one)
-_LIBANN_SPLIT = re.compile(r"[, ]+")
-_LIBANN_LINE = 8191
+# libann's ann_load_csv separates values with commas, spaces, tabs and \r
+_LIBANN_SPLIT = re.compile(r"[, \t\r]+")
 
 
 def _field_preview(text: str, width: int = 40) -> str:
@@ -57,28 +54,25 @@ def _field_preview(text: str, width: int = 40) -> str:
     return repr(text if len(text) <= width else text[:width] + "...")
 
 
-def _check_numeric(filename: str, has_header: bool, delimiter: Optional[str], max_rows: Optional[int] = None) -> None:
+def _check_numeric(filename: str, has_header: bool, delimiter: Optional[str]) -> None:
     """Raise ValueError at the first field that is not a number, or row with
-    a different number of fields, in the first max_rows rows (all if None).
-    delimiter None splits as libann does, at commas and spaces."""
+    a different number of fields. delimiter None splits as libann does, at
+    commas, spaces and tabs, and allows quoted numbers."""
     expected = None
     first = 1
     with open(filename, "r", encoding="utf-8", errors="replace") as f:
         for line_no, line in enumerate(f, 1):
             if has_header and line_no == 1:
                 continue
-            if max_rows is not None and line_no - (1 if has_header else 0) > max_rows:
-                return
-            if delimiter is None and len(line) > _LIBANN_LINE:
-                raise ValueError(f"{filename} line {line_no} has {len(line.rstrip())} characters, more than libann's "
-                                 f"reader takes ({_LIBANN_LINE - 1}): pass use_c_library=False")
             line = line.strip()
             if not line:
                 continue
             fields = line.split(delimiter) if delimiter is not None else [f for f in _LIBANN_SPLIT.split(line) if f]
             for col, field in enumerate(fields, 1):
                 try:
-                    float(field)
+                    unquoted = field[1:-1] if delimiter is None and len(field) > 1 and field[0] == field[-1] == '"' \
+                        else field
+                    float(unquoted)
                 except ValueError:
                     hint = (" It looks like a header: pass has_header=True." if line_no == 1 and not has_header
                             else " For files with text use load_text_csv(), which keeps the fields as strings.")
@@ -108,29 +102,19 @@ def _load_csv_c(filename: str, has_header: bool) -> Tuple[ArrayLike, int, int]:
     n_rows = rows_ptr[0]
     n_cols = stride_ptr[0]
     
-    if n_rows == 0 or n_cols == 0:
-        return to_array([[]]), 0, 0
-    
-    # Copy data from C array to Python
-    if HAS_NUMPY:
-        import numpy as np
-        # Create numpy array from raw pointer using buffer interface
-        total_elements = n_rows * n_cols
-        buffer = ffi.buffer(data_ptr[0], total_elements * ffi.sizeof("real"))
-        data = np.frombuffer(buffer, dtype=np.float32).reshape(n_rows, n_cols).copy()
-    else:
-        data = []
-        for i in range(n_rows):
-            row = [data_ptr[0][i * n_cols + j] for j in range(n_cols)]
-            data.append(row)
-        data = to_array(data)
-    
-    # Note: The C library allocates memory with malloc. Since we've copied the data,
-    # the caller should free it. However, calling free() requires linking stdlib.
-    # For now, we rely on the garbage collector to handle this through CFFI's gc mechanism
-    # or accept a small memory leak. In production, consider adding a cleanup function to libann.
-    
-    return data, n_rows, n_cols
+    # copy the values out, then free libann's array (with its own C runtime's free)
+    try:
+        if n_rows == 0 or n_cols == 0:
+            return to_array([[]]), 0, 0
+        if HAS_NUMPY:
+            import numpy as np
+            buffer = ffi.buffer(data_ptr[0], n_rows * n_cols * ffi.sizeof("real"))
+            data = np.frombuffer(buffer, dtype=np.float32).reshape(n_rows, n_cols).copy()
+        else:
+            data = to_array([[data_ptr[0][i * n_cols + j] for j in range(n_cols)] for i in range(n_rows)])
+        return data, n_rows, n_cols
+    finally:
+        lib.ann_free_csv(data_ptr[0])
 
 
 def _load_csv_python(

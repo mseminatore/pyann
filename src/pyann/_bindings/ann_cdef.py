@@ -153,6 +153,7 @@ void ann_free_network(PNetwork pnet);
 
 // Data loading
 int ann_load_csv(const char *filename, int has_header, real **data, int *rows, int *stride);
+void ann_free_csv(real *data);
 
 // Network save/load (text format)
 int ann_save_network(const PNetwork pnet, const char *filename);
