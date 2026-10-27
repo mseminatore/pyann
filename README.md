@@ -665,8 +665,32 @@ y = one_hot_encode(labels, num_classes=10)
 X_train, y_train, X_val, y_val = split_data(X_norm, y, train_ratio=0.8)
 ```
 
-`normalize` and `one_hot_encode` need NumPy; `load_csv` and `split_data` also
-work without it (returning lists).
+`load_csv` reads files of numbers only (like the MNIST CSVs): a field that
+isn't a number, or a line with a different number of fields, raises
+`ValueError` naming the line and column. For text, such as the IMDB reviews
+CSV, `load_text_csv` returns each column as a list of strings, with quoted
+commas, quotes and line breaks handled:
+
+```python
+from pyann import Tokenizer, pad_sequences, strip_html
+from pyann.utils import load_text_csv, one_hot_encode, split_data
+
+data = load_text_csv('IMDB Dataset.csv')            # {'review': [...], 'sentiment': [...]}
+labels = [s == 'positive' for s in data['sentiment']]
+y = one_hot_encode(labels, num_classes=2)
+
+tok = Tokenizer(num_words=20000, oov_token='<unk>', preprocess=strip_html).fit_on_texts(data['review'])
+x = pad_sequences(tok.texts_to_sequences(data['review']), maxlen=200)
+x_train, y_train, x_val, y_val = split_data(x, y, train_ratio=0.8, seed=1)
+```
+
+`columns=['review']` keeps only some columns (by name, or by index), and
+`has_header=False` keys them `0, 1, ...`. `split_data` needs one row per sample
+in both `X` and `y`, each row the same length: token-id lists straight from
+`texts_to_sequences` raise `ValueError` asking for `pad_sequences` first.
+
+`normalize` and `one_hot_encode` need NumPy; `load_csv`, `load_text_csv` and
+`split_data` also work without it (returning lists).
 
 ## API Reference
 
