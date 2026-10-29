@@ -964,11 +964,35 @@ model.predict(X)                # batch inference on the GPU when enabled
 
 If no GPU backend is built in, or no device is found, `enable_gpu()` returns `False` and everything keeps running on the CPU with BLAS, so the same code works everywhere.
 
+### Which GPU backends the wheels include
+
+| Platform | Wheel's GPU backend | Runs on |
+|---|---|---|
+| macOS (Apple silicon) | Metal | Apple GPUs |
+| Linux, Windows | Vulkan | AMD, Intel and NVIDIA GPUs (any Vulkan 1.1 driver) |
+
+Metal and Vulkan train and run every layer kind. A build with several backends tries them in the
+order Metal, Vulkan, CUDA; set the `ANN_GPU` environment variable (`metal`, `vulkan`, `cuda` or
+`none`, any case) before `enable_gpu()` to pick one, and `backend_info()["gpu_active"]` names the
+one that started. `ANN_GPU` can only pick a backend the library was built with: otherwise libann
+prints why and uses the CPU, e.g. `[ann] ANN_GPU=cuda: this build has no cuda backend (it has:
+Vulkan); using the CPU`.
+
+**CUDA** is not in the wheels. It needs a source build with the CUDA Toolkit installed, runs
+dense networks only (convolutional and text models stay on the CPU), and has had little
+testing, so on NVIDIA cards the wheels' Vulkan backend is usually the better choice:
+
+```bash
+CMAKE_ARGS="-DUSE_CUDA=ON" pip install --no-binary pylibann pylibann
+# RTX 50-series (Blackwell) cards need CUDA 12.8+ and their architecture:
+CMAKE_ARGS="-DUSE_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=120" pip install --no-binary pylibann pylibann
+```
+
 Notes:
 - `enable_gpu()` applies to the whole process and cannot be undone.
-- GPU speedups depend on problem size. In an informal test on Apple silicon (batch size 128) Metal sped up batch inference but was several times slower than the CPU for training, which is why it is not enabled automatically. Measure your own workload.
-- The macOS wheels include Metal, and the Linux and Windows wheels Vulkan. CUDA is only available when building from source with `USE_CUDA=ON`, runs dense networks only, and has had little testing.
-- A build with several GPU backends tries them in the order Metal, Vulkan, CUDA. Set the `ANN_GPU` environment variable (`metal`, `vulkan`, `cuda` or `none`) before `enable_gpu()` to pick one; `backend_info()["gpu_active"]` names the one that started.
+- GPU speedups depend on the model and batch size: larger CNNs and batches gain most, while small
+  models can be faster on the CPU (on an M1, a convolutional autoencoder trained in 8 s on Metal
+  against 21 s on the CPU). It is not enabled automatically; measure your own workload.
 - `predict()` runs the whole input as one batch call.
 
 ## License
