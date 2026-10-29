@@ -18,8 +18,9 @@ words don't leak into the vocabulary. Words the training reviews never used
 become <unk>.
 
 Then it shows each embedding's nearest words to a few probes (vectors read
-with get_layer_weights), and keeps the last model's weights in a .npz file
-(save_weights / load_weights).
+with get_layer_weights), keeps the last model's weights in a .npz file
+(save_weights / load_weights), and quantizes it to int8 for a C header:
+the 20,000-word table, most of the model, becomes a quarter of its size.
 
 Data, downloaded once into examples/data/:
   - the reviews: Stanford's aclImdb archive (84 MB; official 25k train and
@@ -216,6 +217,16 @@ def main() -> int:
         fresh = build(tok.vocab_size).load_weights(weights)
         same = np.array_equal(fresh.predict(data[2][0][:500]), final.predict(data[2][0][:500]))
         print(f"\nsave_weights / load_weights into a new model: {'same predictions' if same else 'DIFFERENT predictions'}")
+
+        # int8: the ids stay ids, the vectors become an int8 table
+        (x_train, _), _, (x_test, y_test) = data
+        q = final.quantize(x_train[:1000])
+        header = Path(tmp) / "imdb_q.h"
+        q.export_c_header(header, "imdb_q")
+        params = sum(w.size for w in final.get_weights())
+        print(f"int8: {q.evaluate(x_test, y_test):.1%} test accuracy (float32 {final.evaluate(x_test, y_test):.1%}); "
+              f"parameters {params * 4 / 1e6:.1f} MB as float32, about {params / 1e6:.1f} MB as int8 "
+              f"(C header imdb_q.h: imdb_q_predict(ids, out, ws))")
     return 0
 
 

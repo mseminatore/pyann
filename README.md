@@ -297,7 +297,8 @@ unpadded (`pad_sequences` pads at the end by default for this reason; padding
 at the start also works when every stride is 1). Without a mask the padding
 vector is still zero, but a conv's bias makes the padding steps count. Text
 models train on the GPU with Metal or Vulkan, save and load (the mask
-included) and export to ONNX; they cannot be quantized yet. See
+included), export to ONNX, and quantize to int8 C headers that take the token
+ids (see [int8 Quantization and C Export](#int8-quantization-and-c-export)). See
 [`examples/text_classification.py`](examples/text_classification.py).
 
 The `Tokenizer` lower-cases texts and turns ASCII punctuation into spaces,
@@ -645,7 +646,24 @@ int label = model_argmax(scores);
 ```
 
 `q.quantize_input(x)` gives the int8 inputs the device expects, and
-`q.predict_int8(x_q)` returns exactly what the header computes. See libann's
+`q.predict_int8(x_q)` returns exactly what the header computes.
+
+A text model (an `Embedding` first) keeps its token ids as ids: the vectors
+become an int8 table, a quarter of the float32 size (usually most of the
+model), and the header's functions take `const int32_t *ids`. Padding masks
+work as in the float model. `q.quantize_input(x)` then returns the int32 ids
+and `q.predict_int8(ids)` takes them:
+
+```c
+static int8_t workspace[REVIEWS_WORKSPACE_SIZE];
+int32_t ids[REVIEWS_INPUT_SIZE];            /* the tokenizer's ids, 0-padded at the end */
+int8_t scores[REVIEWS_OUTPUT_SIZE];
+reviews_predict(ids, scores, workspace);
+```
+
+[`examples/imdb_glove.py`](examples/imdb_glove.py) quantizes its review model:
+88.2% test accuracy as int8 and as float32, with 8.3 MB of float32 parameters
+becoming 2.1 MB. See libann's
 [C export guide](https://github.com/mseminatore/ann/blob/main/docs/C_EXPORT.md)
 for the scheme and generated API.
 

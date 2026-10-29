@@ -1165,6 +1165,10 @@ class Sequential:
         value range; a few hundred to a few thousand representative training
         samples are usually enough. The model itself is not changed.
 
+        A text model (an Embedding first) keeps its token ids as ids: the
+        vectors become an int8 table, and padding masks work as in the float
+        model. Its QuantizedModel and C headers take the ids directly.
+
         Args:
             x_calibration: Input samples, preprocessed like real inputs
 
@@ -1189,9 +1193,11 @@ class Sequential:
             raise NetworkError(c_error_message(
                 "Quantization failed (softmax is supported only on the output layer, each "
                 "BatchNormalization must follow a Dense or Conv2D layer without an activation, and "
-                "models with an Embedding cannot be quantized yet)"))
+                "an Embedding must be the first layer)"))
         output_size = lib.ann_get_layer_nodes(self._ptr, lib.ann_get_layer_count(self._ptr) - 1)
-        return QuantizedModel(ptr, self._input_shape, input_size, output_size, self._output_shape())
+        takes_ids = bool(self._layers) and isinstance(self._layers[0], Embedding)
+        return QuantizedModel(ptr, self._input_shape, input_size, output_size, self._output_shape(),
+                              takes_ids=takes_ids)
 
     def export_c_header(self, filepath: Union[str, Path], prefix: Optional[str] = None,
                         runtime: bool = True) -> Path:
