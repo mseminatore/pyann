@@ -3,6 +3,7 @@ masks) and global max pooling."""
 
 import gzip
 import json
+import sys
 import warnings
 
 import pytest
@@ -268,13 +269,25 @@ class TestTextClassifier:
         ids = q.quantize_input(x_test[:10])
         rows = ",".join("{" + ",".join(str(v) for v in row) + "}" for row in ids)
         (tmp_path / "main.c").write_text(
-            '#include <stdio.h>\n#include "reviews_q.h"\n'
+            '#include <stdio.h>\n'
+            '#include "reviews_q.h"\n'
             f"static const int32_t ids[10][REVIEWS_Q_INPUT_SIZE] = {{{rows}}};\n"
-            "int main(void) { static int8_t ws[REVIEWS_Q_WORKSPACE_SIZE]; int8_t out[REVIEWS_Q_OUTPUT_SIZE];\n"
-            "  for (int r = 0; r < 10; r++) { if (reviews_q_predict(ids[r], out, ws)) return 1;\n"
-            '    for (int k = 0; k < REVIEWS_Q_OUTPUT_SIZE; k++) printf("%d ", out[k]); printf("\\n"); }\n'
-            "  return 0; }\n")
-        exe = tmp_path / "main"
+            "int main(void)\n"
+            "{\n"
+            "    static int8_t ws[REVIEWS_Q_WORKSPACE_SIZE];\n"
+            "    int8_t out[REVIEWS_Q_OUTPUT_SIZE];\n"
+            "    int r, k;\n"
+            "    for (r = 0; r < 10; r++) {\n"
+            "        if (reviews_q_predict(ids[r], out, ws) != 0)\n"
+            "            return 1;\n"
+            "        for (k = 0; k < REVIEWS_Q_OUTPUT_SIZE; k++) {\n"
+            '            printf("%d ", out[k]);\n'
+            "        }\n"
+            '        printf("\\n");\n'
+            "    }\n"
+            "    return 0;\n"
+            "}\n")
+        exe = tmp_path / ("main.exe" if sys.platform == "win32" else "main")
         subprocess.run([compiler, "-std=c99", "-Wall", "-Werror", "-DANN_RT_NO_FLOAT", "-o", str(exe),
                         str(tmp_path / "main.c")], check=True, cwd=tmp_path)
         out = subprocess.run([str(exe)], capture_output=True, text=True, check=True).stdout.split()
