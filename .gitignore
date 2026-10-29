@@ -4,6 +4,7 @@ __pycache__/
 *$py.class
 
 activity_deploy/
+fashion_deploy/
 
 # data files
 fashion-mnist_train.csv
