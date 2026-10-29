@@ -259,7 +259,7 @@ class TestQuantize:
         q = model.quantize(x)
         assert (q.predict(x).argmax(1) == model.predict(x).argmax(1)).mean() >= 0.95
         header = q.export_c_header(tmp_path / "waves_q.h", "waves_q", runtime=False)
-        assert "ANN_RT_VERSION < 6" in header.read_text()
+        assert "ANN_RT_VERSION < 7" in header.read_text()
 
     def test_mobilenet(self):
         x, y = bars()

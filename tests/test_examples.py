@@ -107,6 +107,7 @@ class TestStandaloneExamples:
         assert "learned from scratch:" in out and "GloVe, frozen:" in out and "GloVe, then fine-tuned:" in out
         assert "9 of" in out                         # vectors for 9 of the vocabulary's words
         assert "same predictions" in out
+        assert "int8:" in out and "imdb_q_predict(ids" in out
 
     def test_online_learning(self, tmp_path):
         out = run_example("online_learning.py", "--batches", "40", cwd=tmp_path)

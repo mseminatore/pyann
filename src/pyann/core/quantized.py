@@ -62,6 +62,9 @@ class QuantizedModel:
     tensor, and sums are int32, so the model runs on integer-only hardware.
     It does not depend on the model it came from.
 
+    A text model (one starting with an Embedding) takes token ids, as the
+    float model does; they stay ids (see :meth:`predict_int8`).
+
     Example::
 
         q = model.quantize(x_train[:1000])
@@ -70,8 +73,10 @@ class QuantizedModel:
     """
 
     def __init__(self, ptr, input_shape: Optional[Tuple[int, ...]], input_size: int, output_size: int,
-                 output_shape: Optional[Tuple[int, ...]] = None):
+                 output_shape: Optional[Tuple[int, ...]] = None, takes_ids: bool = False):
         self._ptr = ptr
+        # a text model (Embedding first): its inputs are token ids, which aren't quantized
+        self.takes_ids = takes_ids
         self._input_shape = input_shape
         self._output_shape = output_shape
         self.input_size = input_size
@@ -142,9 +147,15 @@ class QuantizedModel:
 
         Rounds exactly like the C runtime (float32 math, halves away from
         zero), so ``predict_int8(quantize_input(x))`` is what ``predict(x)``
-        computes internally.
+        computes internally. A text model's token ids aren't quantized: they
+        come back as int32 ids (rounded).
         """
         rows = self._rows(x, "x", self.input_size)
+        if self.takes_ids:
+            if has_numpy():
+                import numpy as np
+                return np.floor(np.asarray(rows, dtype=np.float64) + 0.5).astype(np.int32)
+            return [[int(math.floor(float(v) + 0.5)) for v in row] for row in rows]
         if has_numpy():
             import numpy as np
             v = np.asarray(rows, dtype=np.float32) / np.float32(self.input_scale) + np.float32(self.input_zero_point)
@@ -175,9 +186,12 @@ class QuantizedModel:
         results match the exported header's ``<prefix>_predict`` bit for bit.
 
         Args:
-            x_q: int8 inputs, e.g. from :meth:`quantize_input`
+            x_q: int8 inputs, e.g. from :meth:`quantize_input`; for a text
+                model, the token ids (int32, as its header takes them)
         """
         rows = self._rows(x_q, "x_q", self.input_size)
+        if self.takes_ids:
+            return self._predict_ids(rows)
         if has_numpy():
             import numpy as np
             arr = np.asarray(rows)
@@ -206,6 +220,24 @@ class QuantizedModel:
             results.append([outputs[k] for k in range(self.output_size)])
         return results
 
+    def _predict_ids(self, rows) -> ArrayLike:
+        """int8 outputs for rows of token ids (a text model)."""
+        ids = ffi.new("int[]", self.input_size)
+        outputs = ffi.new("signed char[]", self.output_size)
+        results = []
+        for row in rows:
+            for i, v in enumerate(row):
+                if float(v) != int(v) or not -2**31 <= int(v) < 2**31:
+                    raise ValueError(f"token ids must be int32 integers, got {v!r}")
+                ids[i] = int(v)
+            raise_for_error_code(lib.ann_quantized_predict_ids(self._ptr, ids, outputs),
+                                 "Quantized prediction failed")
+            results.append([outputs[k] for k in range(self.output_size)])
+        if has_numpy():
+            import numpy as np
+            return np.array(results, dtype=np.int8).reshape(len(results), self.output_size)
+        return results
+
     def evaluate(self, x: ArrayLike, y: ArrayLike) -> float:
         """Classification accuracy of the int8 model (compare with Sequential.evaluate)."""
         x_tensor = Tensor(self._rows(x, "x", self.input_size))
@@ -221,7 +253,8 @@ class QuantizedModel:
 
         The header holds the parameters as ``static const`` arrays and defines
         ``<prefix>_predict`` (int8 in and out), ``<prefix>_predict_float`` and
-        ``<prefix>_argmax``, plus size and quantization macros. It needs
+        ``<prefix>_argmax``, plus size and quantization macros. A text model's
+        functions take ``const int32_t *ids`` instead of the int8 or float input. It needs
         ``ann_rt.h``, which is copied next to it unless ``runtime`` is False.
 
         Args:

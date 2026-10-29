@@ -26,7 +26,7 @@ Kaggle's `IMDB Dataset.csv` with `--csv`; GloVe vectors with `--download-glove` 
 
 | Example | Shows | Result |
 |---|---|---|
-| [`imdb_glove.py`](imdb_glove.py) | Sentiment of 50,000 movie reviews: `load_text_csv`, `Tokenizer(preprocess=strip_html)` fitted on the training reviews only, an `Embedding` learned from scratch vs pre-trained GloVe vectors (`load_word_vectors`, `Embedding(weights=..., trainable=False)`), then fine-tuned with `set_trainable`; nearest words from `get_layer_weights`; `save_weights` / `load_weights` | 85.8% from scratch, 88.1% with frozen GloVe, 88.2% fine-tuned; about 5 min on a 4-core Intel Mac CPU |
+| [`imdb_glove.py`](imdb_glove.py) | Sentiment of 50,000 movie reviews: `load_text_csv`, `Tokenizer(preprocess=strip_html)` fitted on the training reviews only, an `Embedding` learned from scratch vs pre-trained GloVe vectors (`load_word_vectors`, `Embedding(weights=..., trainable=False)`), then fine-tuned with `set_trainable`; nearest words from `get_layer_weights`; `save_weights` / `load_weights`; int8 quantization for a C header that takes token ids | 85.8% from scratch, 88.1% with frozen GloVe, 88.2% fine-tuned, 88.2% as int8 (8.3 MB of parameters to 2.1 MB); about 5 min on a 4-core Intel Mac CPU |
 
 ## Fashion-MNIST
 

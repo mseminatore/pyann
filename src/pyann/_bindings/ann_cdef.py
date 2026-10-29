@@ -174,6 +174,7 @@ PQuantizedNetwork ann_quantize(const PNetwork pnet, const PTensor calibration_in
 void ann_free_quantized(PQuantizedNetwork q);
 int ann_quantized_predict(const PQuantizedNetwork q, const real *inputs, real *outputs);
 int ann_quantized_predict_int8(const PQuantizedNetwork q, const signed char *inputs, signed char *outputs);
+int ann_quantized_predict_ids(const PQuantizedNetwork q, const int *ids, signed char *outputs);
 int ann_quantized_get_io_params(const PQuantizedNetwork q, real *in_scale, int *in_zero_point,
                                 real *out_scale, int *out_zero_point);
 real ann_quantized_evaluate_accuracy(const PQuantizedNetwork q, const PTensor inputs, const PTensor outputs);

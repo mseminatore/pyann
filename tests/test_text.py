@@ -3,6 +3,7 @@ masks) and global max pooling."""
 
 import gzip
 import json
+import sys
 import warnings
 
 import pytest
@@ -235,12 +236,62 @@ class TestTextClassifier:
         assert back._layers[0].padding_idx == 0 and not back._layers[0].mask_padding
         assert isinstance(back._layers[2], GlobalMaxPooling2D)
 
-    def test_cannot_quantize_yet(self, tokenized):
-        _, x, y, _, _ = tokenized
+    def test_quantizes_to_int8(self, tokenized):
+        # the ids stay ids; the int8 model keeps the float one's accuracy, masks included
+        _, x, y, x_test, y_test = tokenized
         model = text_model(14)
-        model.fit(x[:64], y[:64], epochs=1, batch_size=32, verbose=0)
-        with pytest.raises(NetworkError, match="Embedding"):
-            model.quantize(x[:64])
+        model.fit(x, y, epochs=40, batch_size=32, verbose=0)
+        q = model.quantize(x[:300])
+        assert q.takes_ids and (q.input_scale, q.input_zero_point) == (1.0, 0)
+        assert q.evaluate(x_test, y_test) >= model.evaluate(x_test, y_test) - 0.03
+        assert np.abs(q.predict(x_test) - model.predict(x_test)).max() < 0.1
+
+        ids = q.quantize_input(x_test[:20])
+        assert ids.dtype == np.int32 and np.array_equal(ids, x_test[:20])
+        logits = q.predict_int8(ids)
+        assert logits.dtype == np.int8 and logits.shape == (20, 2)
+        assert np.array_equal(logits.argmax(1), q.predict(x_test[:20]).argmax(1))
+        with pytest.raises(ValueError, match="int32"):
+            q.predict_int8(x_test[:1] + 0.5)
+
+    def test_int8_header_matches(self, tokenized, tmp_path):
+        # compiled with only ann_rt.h, the header gives predict_int8's outputs bit for bit
+        import shutil
+        import subprocess
+        compiler = shutil.which("cc") or shutil.which("gcc") or shutil.which("clang")
+        if compiler is None:
+            pytest.skip("no C compiler")
+        _, x, y, x_test, _ = tokenized
+        model = text_model(14)
+        model.fit(x, y, epochs=5, batch_size=32, verbose=0)
+        q = model.quantize(x[:200])
+        q.export_c_header(tmp_path / "reviews_q.h", "reviews_q")
+        ids = q.quantize_input(x_test[:10])
+        rows = ",".join("{" + ",".join(str(v) for v in row) + "}" for row in ids)
+        (tmp_path / "main.c").write_text(
+            '#include <stdio.h>\n'
+            '#include "reviews_q.h"\n'
+            f"static const int32_t ids[10][REVIEWS_Q_INPUT_SIZE] = {{{rows}}};\n"
+            "int main(void)\n"
+            "{\n"
+            "    static int8_t ws[REVIEWS_Q_WORKSPACE_SIZE];\n"
+            "    int8_t out[REVIEWS_Q_OUTPUT_SIZE];\n"
+            "    int r, k;\n"
+            "    for (r = 0; r < 10; r++) {\n"
+            "        if (reviews_q_predict(ids[r], out, ws) != 0)\n"
+            "            return 1;\n"
+            "        for (k = 0; k < REVIEWS_Q_OUTPUT_SIZE; k++) {\n"
+            '            printf("%d ", out[k]);\n'
+            "        }\n"
+            '        printf("\\n");\n'
+            "    }\n"
+            "    return 0;\n"
+            "}\n")
+        exe = tmp_path / ("main.exe" if sys.platform == "win32" else "main")
+        subprocess.run([compiler, "-std=c99", "-Wall", "-Werror", "-DANN_RT_NO_FLOAT", "-o", str(exe),
+                        str(tmp_path / "main.c")], check=True, cwd=tmp_path)
+        out = subprocess.run([str(exe)], capture_output=True, text=True, check=True).stdout.split()
+        assert np.array_equal(np.array(out, dtype=np.int8).reshape(10, -1), q.predict_int8(ids))
 
     def test_trains_on_the_gpu(self, tokenized):
         # on Metal and Vulkan the embedding network is uploaded; elsewhere it stays on the CPU
