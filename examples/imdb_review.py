@@ -6,8 +6,10 @@ words decided it
 Loads the model imdb_glove.py trained (run it first) with its tokenizer, so
 a new text gets the same word ids, padded the same way, and predicts it.
 Then it predicts the review again once per word with that word left out:
-the change in the positive probability is how much the word mattered, so
-"not" shows up flipping "bad".
+how far that moves the prediction is how much the word mattered. The moves
+are in log-odds, log(p / (1 - p)), which keep showing a word's weight when
+the probability is already close to 0% or 100% (+1 is about 73% from 50%,
++2 about 88%, and so on).
 
 --int8 runs the int8 model (quantized here from the training rows saved
 with the model), as the C header beside it would on a microcontroller.
@@ -49,7 +51,8 @@ class Reviewer:
         return np.asarray(self.model.predict(x))[:, 1]
 
     def review(self, text: str):
-        """The text's positive probability, and each word with how much leaving it out lowers it."""
+        """The text's positive probability, and each word with how much leaving
+        it out lowers the log-odds of positive (repeated words numbered)."""
         words = self.tok.tokenize(text)
         ids = self.tok.texts_to_sequences([text])[0]
         if len(words) != len(ids):              # a tokenizer without <unk> drops unknown words
@@ -58,10 +61,19 @@ class Reviewer:
             words, ids = words[-self.maxlen:], ids[-self.maxlen:]
         variants = [ids] + [ids[:i] + ids[i + 1:] for i in range(len(ids))]
         p = self.positive(variants)
+        p_clip = np.clip(p.astype(np.float64), 1e-6, 1 - 1e-6)
+        log_odds = np.log(p_clip / (1 - p_clip))
         unknown = self.tok.word_index.get(self.tok.oov_token)
-        effects = [(word + (" (unknown)" if i == unknown else ""), float(p[0] - without))
-                   for word, i, without in zip(words, ids, p[1:])]
+        seen, effects = {}, []
+        for word, i, without in zip(words, ids, log_odds[1:]):
+            seen[word] = seen.get(word, 0) + 1
+            label = word if words.count(word) == 1 else f"{word} ({ordinal(seen[word])})"
+            effects.append((label + (" (unknown)" if i == unknown else ""), float(log_odds[0] - without)))
         return float(p[0]), effects
+
+
+def ordinal(n: int) -> str:
+    return f"{n}{'th' if 10 <= n % 100 <= 20 else {1: 'st', 2: 'nd', 3: 'rd'}.get(n % 10, 'th')}"
 
 
 def show(reviewer: Reviewer, text: str, count: int) -> None:
@@ -72,9 +84,9 @@ def show(reviewer: Reviewer, text: str, count: int) -> None:
         print("  (no words it knows)")
         return
     for label, sign in (("pushed it up", 1), ("pulled it down", -1)):
-        top = sorted((e for e in effects if sign * e[1] > 0.005), key=lambda e: -abs(e[1]))[:count]
+        top = sorted((e for e in effects if sign * e[1] > 0.05), key=lambda e: -abs(e[1]))[:count]
         if top:
-            print(f"  {label}: " + ", ".join(f"{word} ({delta:+.0%})" for word, delta in top))
+            print(f"  {label}: " + ", ".join(f"{word} {delta:+.1f}" for word, delta in top))
 
 
 def main() -> int:
@@ -87,7 +99,8 @@ def main() -> int:
 
     reviewer = Reviewer(Path(args.dir), int8=args.int8)
     print(f"{'int8' if args.int8 else 'float32'} model, {reviewer.tok.vocab_size} word ids, "
-          f"reviews of up to {reviewer.maxlen} words\n")
+          f"reviews of up to {reviewer.maxlen} words; a word's number is how much it moves the "
+          f"log-odds of positive\n")
 
     if args.text:
         for text in args.text:

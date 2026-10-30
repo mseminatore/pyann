@@ -345,8 +345,13 @@ first, e.g. with gensim's `save_word2vec_format(path, binary=False)`.
 
 [`examples/imdb_glove.py`](examples/imdb_glove.py) does this on the 50,000 IMDB
 reviews: it fits the tokenizer on the training reviews only, then compares an
-embedding learned from scratch with frozen and fine-tuned GloVe vectors.
-It saves the final model with its tokenizer, and
+embedding learned from scratch with frozen and fine-tuned GloVe vectors. For
+sentiment, learning from scratch wins (90.3% against 88.5%, and also with
+2,000 or 5,000 training reviews): GloVe learns from which words appear near
+which, so "good" and "bad" get nearly the same vector (cosine 0.77, as close
+as "good" and "great"), while the vectors learned from the labels point them
+apart. Pre-trained vectors fit tasks about topic and meaning better.
+It saves the best model with its tokenizer, and
 [`examples/imdb_review.py`](examples/imdb_review.py) loads them to predict
 reviews you type, showing which words decided each one.
 
@@ -668,7 +673,7 @@ reviews_predict(ids, scores, workspace);
 ```
 
 [`examples/imdb_glove.py`](examples/imdb_glove.py) quantizes its review model:
-88.4% test accuracy as int8 against 88.5% as float32, with 8.3 MB of float32
+90.4% test accuracy as int8 against 90.3% as float32, with 8.3 MB of float32
 parameters becoming 2.1 MB. See libann's
 [C export guide](https://github.com/mseminatore/ann/blob/main/docs/C_EXPORT.md)
 for the scheme and generated API.
@@ -792,6 +797,7 @@ pyann.enable_gpu()     # initialize the GPU backend; returns True if one is acti
 pyann.gpu_enabled()    # whether a GPU backend is active
 pyann.set_num_threads(4)   # CPU threads for training/batched inference (0 = default, 1 = single-threaded)
 pyann.get_num_threads()    # current CPU thread count
+pyann.set_seed(1)          # repeatable training: initialization, shuffling, dropout, input noise
 ```
 
 #### Training options

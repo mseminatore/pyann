@@ -539,8 +539,9 @@ class Embedding(Layer):
     ``[0, input_dim)``, e.g. from ``pyann.text.Tokenizer`` and
     ``pad_sequences``). The output is the sequence (output_dim, input_length),
     channels-first as for Conv1D, so Conv1D, MaxPool1D, BatchNormalization
-    and the global pooling layers follow directly. Vectors start N(0, 1), as
-    in PyTorch's nn.Embedding.
+    and the global pooling layers follow directly. Vectors start
+    uniform(-0.05, 0.05), as in Keras (PyTorch's N(0, 1) trains far slower
+    with Adam), or from ``weights``.
     
     ``padding_idx`` (as in PyTorch) is the id that pads texts to the same
     length: its vector is always zero and never trained; ids outside the
