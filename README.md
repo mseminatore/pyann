@@ -336,13 +336,19 @@ model.compile(learning_rate=1e-4)
 model.fit(x, y, epochs=2)
 ```
 
-The words must match the file's (GloVe's are lower case, as the Tokenizer's
-are by default). The binary word2vec format isn't read; convert it to text
+The words must match the file's: GloVe's are lower case, as the Tokenizer's
+are by default, and its text had contractions split (`do n't`, `it 's`), so
+add `split_contractions` (`preprocess=[strip_html, split_contractions]`) or
+words like `don't` and `it's` (on IMDB, 703 of the 770 words without vectors)
+start random. The binary word2vec format isn't read; convert it to text
 first, e.g. with gensim's `save_word2vec_format(path, binary=False)`.
 
 [`examples/imdb_glove.py`](examples/imdb_glove.py) does this on the 50,000 IMDB
 reviews: it fits the tokenizer on the training reviews only, then compares an
 embedding learned from scratch with frozen and fine-tuned GloVe vectors.
+It saves the final model with its tokenizer, and
+[`examples/imdb_review.py`](examples/imdb_review.py) loads them to predict
+reviews you type, showing which words decided each one.
 
 ### Layer Weights and Freezing
 
@@ -662,8 +668,8 @@ reviews_predict(ids, scores, workspace);
 ```
 
 [`examples/imdb_glove.py`](examples/imdb_glove.py) quantizes its review model:
-88.2% test accuracy as int8 and as float32, with 8.3 MB of float32 parameters
-becoming 2.1 MB. See libann's
+88.4% test accuracy as int8 against 88.5% as float32, with 8.3 MB of float32
+parameters becoming 2.1 MB. See libann's
 [C export guide](https://github.com/mseminatore/ann/blob/main/docs/C_EXPORT.md)
 for the scheme and generated API.
 
@@ -845,9 +851,10 @@ don't fit together raises `NetworkError` when it is built.
 ### Text
 
 ```python
-Tokenizer(num_words=None, oov_token=None, lower=True, filters=..., split=None, char_level=False, preprocess=None)
+Tokenizer(num_words=None, oov_token=None, lower=True, filters=..., split=None, char_level=False, preprocess=None)  # preprocess: a function or a list
 pad_sequences(sequences, maxlen=None, padding='post', truncating='post', value=0)
 strip_html(text)                                 # tags, comments and scripts removed, entities decoded
+split_contractions(text)                         # "don't" -> "do n't", "it's" -> "it 's", as GloVe's text
 load_word_vectors(path, word_index, vocab_size=None, dim=None, missing='zeros', seed=None, padding_idx=0)
 ```
 

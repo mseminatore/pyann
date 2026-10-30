@@ -12,7 +12,7 @@ import pyann
 import pyann.utils.compat as compat
 from pyann import (BatchNormalization, Conv1D, Conv2D, Dense, Embedding, GlobalAveragePooling1D,
                    GlobalMaxPool2D, GlobalMaxPooling1D, GlobalMaxPooling2D, MaxPool1D, Sequential, Tokenizer,
-                   load_word_vectors, pad_sequences, strip_html)
+                   load_word_vectors, pad_sequences, split_contractions, strip_html)
 from pyann.exceptions import NetworkError
 
 np = pytest.importorskip("numpy")
@@ -392,6 +392,43 @@ class TestPreprocess:
         data = json.loads(tok.to_json())
         del data["preprocess"]
         assert Tokenizer.from_json(json.dumps(data)).word_index == tok.word_index
+
+
+class TestSplitContractions:
+    def test_as_glove_tokenized_them(self):
+        assert split_contractions("I don't think it's bad") == "I do n't think it 's bad"
+        assert split_contractions("can't won't DIDN\u2019T") == "ca n't wo n't DID n't"
+        assert split_contractions("you're we've they'll I'd I'm the film's 80's") == \
+            "you 're we 've they 'll I 'd I 'm the film 's 80 's"
+
+    def test_quotes_and_other_apostrophes(self):
+        assert split_contractions("'the end'").split() == ["the", "end"]
+        assert split_contractions("dogs' tails") == "dogs  tails"
+        assert split_contractions("o'clock rock'n'roll") == "o'clock rock'n'roll"
+        with pytest.raises(TypeError):
+            split_contractions(3)
+
+    def test_with_the_tokenizer(self):
+        tok = Tokenizer(preprocess=[strip_html, split_contractions])
+        assert tok.tokenize("It wasn't <br />great, isn't it?") == ["it", "was", "n't", "great", "is", "n't", "it"]
+
+    def test_preprocess_lists_save_by_name(self):
+        tok = Tokenizer(preprocess=[strip_html, split_contractions]).fit_on_texts(["it's <b>fine</b>"])
+        assert json.loads(tok.to_json())["preprocess"] == ["strip_html", "split_contractions"]
+        back = Tokenizer.from_json(tok.to_json())
+        assert back.texts_to_sequences(["<i>it's</i>"]) == tok.texts_to_sequences(["<i>it's</i>"])
+        mixed = Tokenizer(preprocess=[strip_html, str.strip]).fit_on_texts(["a"])
+        assert json.loads(mixed.to_json())["preprocess"] == "custom"
+        with pytest.raises(TypeError):
+            Tokenizer(preprocess=[strip_html, "x"])
+
+    def test_more_words_get_vectors(self, tmp_path):
+        path = tmp_path / "glove.txt"
+        path.write_bytes(b"do 1 0\nn't 0 1\nit 1 1\n's 2 2\nwas 3 3\n")
+        texts = ["it's not what it was", "don't"]
+        plain = Tokenizer().fit_on_texts(texts)
+        split = Tokenizer(preprocess=split_contractions).fit_on_texts(texts)
+        assert load_word_vectors(path, plain)[1] < load_word_vectors(path, split)[1] == 5
 
 
 # --- Pre-trained word vectors ------------------------------------------------

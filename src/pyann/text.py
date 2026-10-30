@@ -50,8 +50,45 @@ def strip_html(text: str) -> str:
     return html.unescape(_TAGS.sub(" ", text))
 
 
+# quotes at a word's start or end, contractions' n't, and clitics ('s, 're, ...)
+_EDGE_QUOTES = re.compile(r"(?<!\w)['\u2019]+|['\u2019]+(?!\w)")
+_NT = re.compile(r"(?<=[A-Za-z])n['\u2019]t\b", re.IGNORECASE)
+_CLITICS = re.compile(r"(?<=\w)['\u2019](s|re|ve|ll|d|m)\b", re.IGNORECASE)
+
+
+def split_contractions(text: str) -> str:
+    """Split contractions as GloVe's and word2vec's training text was
+    tokenized (the Penn Treebank convention): ``don't`` becomes ``do n't``,
+    ``can't`` ``ca n't``, ``it's`` ``it 's``, ``you're`` ``you 're`` (also
+    ``'ve``, ``'ll``, ``'d``, ``'m`` and possessives such as ``film 's``).
+    Quotes at a word's start or end go (``'the`` becomes ``the``), and curly
+    apostrophes count as straight ones.
+
+    For ``Tokenizer(preprocess=[strip_html, split_contractions])`` with
+    pre-trained vectors: they have no ``don't`` or ``it's``, but do have
+    ``do``, ``n't``, ``it`` and ``'s``, so the pieces get vectors (and
+    ``n't`` one near ``not``).
+    """
+    if not isinstance(text, str):
+        raise TypeError(f"texts must be strings, got {type(text).__name__}")
+    text = _EDGE_QUOTES.sub(" ", text)
+    text = _NT.sub(" n't", text)
+    return _CLITICS.sub(lambda m: " '" + m.group(1), text)
+
+
 # preprocess functions of this module, which to_json saves by name
-_BUILTIN_PREPROCESS = {"strip_html": strip_html}
+_BUILTIN_PREPROCESS = {"strip_html": strip_html, "split_contractions": split_contractions}
+
+
+def _preprocess_steps(preprocess) -> Tuple[Callable[[str], str], ...]:
+    """preprocess as a tuple of functions: None, one function, or a list of them."""
+    if preprocess is None:
+        return ()
+    steps = tuple(preprocess) if isinstance(preprocess, (list, tuple)) else (preprocess,)
+    for step in steps:
+        if not callable(step):
+            raise TypeError(f"preprocess must be a function, a list of functions or None, got {type(step).__name__}")
+    return steps
 
 
 class Tokenizer:
@@ -72,9 +109,10 @@ class Tokenizer:
         split: Word separator (None splits on any whitespace)
         char_level: Make each character a token
         preprocess: A function applied to each text first (str to str),
-            e.g. ``strip_html`` or your own cleanup. ``to_json`` saves
-            ``strip_html`` by name; another function must be given to
-            ``from_json`` again.
+            e.g. ``strip_html`` or your own cleanup, or a list of them,
+            applied in order (e.g. ``[strip_html, split_contractions]``).
+            ``to_json`` saves this module's functions by name; one of your
+            own must be given to ``from_json`` again.
 
     Attributes:
         word_index: word -> id, for every word seen (also those past num_words)
@@ -84,11 +122,10 @@ class Tokenizer:
 
     def __init__(self, num_words: Optional[int] = None, oov_token: Optional[str] = None, lower: bool = True,
                  filters: str = DEFAULT_FILTERS, split: Optional[str] = None, char_level: bool = False,
-                 preprocess: Optional[Callable[[str], str]] = None):
+                 preprocess: Union[Callable[[str], str], Sequence[Callable[[str], str]], None] = None):
         if num_words is not None and (not isinstance(num_words, int) or isinstance(num_words, bool) or num_words < 1):
             raise ValueError(f"num_words must be None or a positive int, got {num_words!r}")
-        if preprocess is not None and not callable(preprocess):
-            raise TypeError(f"preprocess must be a function or None, got {type(preprocess).__name__}")
+        self._steps = _preprocess_steps(preprocess)
         self.preprocess = preprocess
         self.num_words = num_words
         self.oov_token = oov_token
@@ -104,8 +141,8 @@ class Tokenizer:
         """A text's tokens, before they are mapped to ids."""
         if not isinstance(text, str):
             raise TypeError(f"texts must be strings, got {type(text).__name__}")
-        if self.preprocess is not None:
-            text = self.preprocess(text)
+        for step in self._steps:
+            text = step(text)
             if not isinstance(text, str):
                 raise TypeError(f"preprocess must return a string, got {type(text).__name__}")
         if self.lower:
@@ -177,14 +214,17 @@ class Tokenizer:
             "word_counts": self.word_counts, "word_index": self.word_index,
         })
 
-    def _preprocess_name(self) -> Optional[str]:
-        """What to_json records: None, a built-in's name, or "custom"."""
-        if self.preprocess is None:
+    def _preprocess_name(self) -> Union[None, str, List[str]]:
+        """What to_json records: None, a built-in's name (a list of names for
+        a list), or "custom" when any function is one of the caller's."""
+        if not self._steps:
             return None
-        for name, fn in _BUILTIN_PREPROCESS.items():
-            if self.preprocess is fn:
-                return name
-        return "custom"
+        names = {fn: name for name, fn in _BUILTIN_PREPROCESS.items()}
+        if any(step not in names for step in self._steps):
+            return "custom"
+        if isinstance(self.preprocess, (list, tuple)):
+            return [names[step] for step in self._steps]
+        return names[self._steps[0]]
 
     @classmethod
     def from_json(cls, text: str, preprocess: Optional[Callable[[str], str]] = None) -> "Tokenizer":
@@ -192,13 +232,15 @@ class Tokenizer:
 
         Args:
             text: The JSON
-            preprocess: The preprocess function, when it was one of your own
-                (``strip_html`` is restored by name); without it texts are
-                not preprocessed, with a warning
+            preprocess: The preprocess function (or list), when it was one of
+                your own (this module's, such as ``strip_html``, are restored
+                by name); without it texts are not preprocessed, with a warning
         """
         data = json.loads(text)
         saved = data.get("preprocess")
-        if preprocess is None and saved in _BUILTIN_PREPROCESS:
+        if preprocess is None and isinstance(saved, list) and all(n in _BUILTIN_PREPROCESS for n in saved):
+            preprocess = [_BUILTIN_PREPROCESS[n] for n in saved]
+        elif preprocess is None and isinstance(saved, str) and saved in _BUILTIN_PREPROCESS:
             preprocess = _BUILTIN_PREPROCESS[saved]
         elif preprocess is None and saved is not None:
             warnings.warn("this Tokenizer was saved with a preprocess function of your own: pass it to "
