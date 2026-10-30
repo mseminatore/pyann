@@ -33,6 +33,7 @@ from pyann._bindings.ffi import (
     gpu_enabled,
     set_num_threads,
     get_num_threads,
+    set_seed,
 )
 
 __all__ = [
@@ -81,4 +82,5 @@ __all__ = [
     "gpu_enabled",
     "set_num_threads",
     "get_num_threads",
+    "set_seed",
 ]

@@ -18,14 +18,24 @@ The tokenizer is fitted on the training reviews only, so the test reviews'
 words don't leak into the vocabulary. Words the training reviews never used
 become <unk>.
 
-Then it shows each embedding's nearest words to a few probes (vectors read
-with get_layer_weights), keeps the last model's weights in a .npz file
-(save_weights / load_weights), and quantizes it to int8 for a C header:
-the 20,000-word table, most of the model, becomes a quarter of its size.
+On this task the vectors learned from scratch win, at every size tried (2,000
+to 40,000 training reviews): GloVe learns from which words appear near which,
+and "good" and "bad" appear in the same places, so its vectors for them are
+about as close as those for "good" and "great". Sentiment needs exactly that
+difference, which vectors learned from the labels get directly. Pre-trained
+vectors suit tasks about topics and meaning better, and they still show the
+API: load_word_vectors, Embedding(weights=..., trainable=False) and
+set_trainable.
 
-The last model is saved with its tokenizer in --save-dir (examples/data/imdb
-by default) for imdb_review.py, which predicts the sentiment of reviews you
-type.
+Then it shows each embedding's nearest words to a few probes and how close
+it puts sentiment opposites (vectors read with get_layer_weights), keeps the
+best model's weights in a .npz file (save_weights / load_weights), and
+quantizes it to int8 for a C header: the 20,000-word table, most of the
+model, becomes a quarter of its size.
+
+The best model (by validation accuracy) is saved with its tokenizer in
+--save-dir (examples/data/imdb by default) for imdb_review.py, which
+predicts the sentiment of reviews you type.
 
 Data, downloaded once into examples/data/:
   - the reviews: Stanford's aclImdb archive (84 MB; official 25k train and
@@ -56,7 +66,7 @@ from pathlib import Path
 import numpy as np
 
 from pyann import (Sequential, Embedding, Conv1D, GlobalMaxPooling1D, Dense, Tokenizer, load_word_vectors,
-                   pad_sequences, split_contractions, strip_html)
+                   pad_sequences, set_seed, split_contractions, strip_html)
 from pyann.utils import load_text_csv, one_hot_encode
 from example_data import DATA_DIR, setup_backend
 
@@ -148,9 +158,19 @@ def train(name, model, data, epochs, results):
     start = time.time()
     history = model.fit(x_train, y_train, epochs=epochs, batch_size=32, validation_data=(x_val, y_val), verbose=0)
     accuracy = model.evaluate(x_test, y_test)
-    results[name] = (accuracy, model.get_layer_weights(0)[0])     # the vectors as they are now
+    # the vectors as they are now, and the validation accuracy that picks the best model
+    results[name] = (accuracy, model.get_layer_weights(0)[0], history["val_accuracy"], model)
     print(f"{name:>28s}: {accuracy:6.1%} test accuracy ({history['val_accuracy']:.1%} validation), "
           f"{time.time() - start:.0f} s")
+
+
+def similarity(vectors: np.ndarray, tok: Tokenizer, a: str, b: str) -> float:
+    """Cosine similarity of two words' vectors (nan for a word not in the vocabulary)."""
+    i, j = tok.word_index.get(a), tok.word_index.get(b)
+    if i is None or j is None or max(i, j) >= len(vectors):
+        return float("nan")
+    u, v = vectors[i], vectors[j]
+    return float(u @ v / max(np.linalg.norm(u) * np.linalg.norm(v), 1e-12))
 
 
 def nearest_words(vectors: np.ndarray, tok: Tokenizer, probe: str, count: int = 5):
@@ -176,6 +196,7 @@ def main() -> int:
                         help="where to save the model for imdb_review.py (default: examples/data/imdb)")
     args = parser.parse_args()
     setup_backend(args.gpu)
+    set_seed(1)         # the same starting weights, shuffles and dropout every run
 
     (train_texts, train_labels), (val_texts, val_labels), (test_texts, test_labels) = load_reviews(args.csv)
     if args.limit:
@@ -214,19 +235,27 @@ def main() -> int:
         train("GloVe, then fine-tuned", glove, data, 1, results)
 
     print("\nNearest words (cosine similarity of the embedding vectors):")
-    for name, (_, vectors) in results.items():
+    for name, (_, vectors, _, _) in results.items():
         if name != "GloVe, then fine-tuned":       # barely moved from the frozen vectors
             for probe in PROBES:
                 print(f"  {name:>20s}  {probe:>7s}: {', '.join(nearest_words(vectors, tok, probe))}")
 
-    # keep the last model's weights apart from the model, and load them into a new one
-    final = glove if path is not None else scratch
+    print("\nHow close are sentiment opposites? (cosine similarity, 1 = same direction)")
+    for name, (_, vectors, _, _) in results.items():
+        if name != "GloVe, then fine-tuned":
+            print(f"  {name:>20s}: " + ", ".join(f"{a}/{b} {similarity(vectors, tok, a, b):.2f}"
+                                                 for a, b in (("good", "bad"), ("good", "great"))))
+
+    # the best model by validation accuracy goes on: its weights apart from it, int8, the demo
+    best_name = max(results, key=lambda name: results[name][2])
+    final = results[best_name][3]
+    print(f"\nBest by validation accuracy: {best_name}")
     with tempfile.TemporaryDirectory() as tmp:
         weights = os.path.join(tmp, "imdb_weights.npz")
         final.save_weights(weights)
         fresh = build(tok.vocab_size).load_weights(weights)
         same = np.array_equal(fresh.predict(data[2][0][:500]), final.predict(data[2][0][:500]))
-        print(f"\nsave_weights / load_weights into a new model: {'same predictions' if same else 'DIFFERENT predictions'}")
+        print(f"save_weights / load_weights into a new model: {'same predictions' if same else 'DIFFERENT predictions'}")
 
         # int8: the ids stay ids, the vectors become an int8 table
         (x_train, _), _, (x_test, y_test) = data

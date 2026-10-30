@@ -117,7 +117,7 @@ class TestStandaloneExamples:
             out = run_example("imdb_review.py", "--dir", str(saved), "--text", "the film was great",
                               "--text", "the plot was boring and dull", *extra, cwd=tmp_path)
             assert out.count("positive:") == 2 and ("int8 model" in out) == bool(extra)
-            assert "great (" in out or "boring (" in out or "dull (" in out
+            assert any(f"{word} +" in out or f"{word} -" in out for word in ("great", "boring", "dull"))
 
     def test_imdb_review_without_a_model(self, tmp_path):
         env_out = subprocess.run([sys.executable, str(EXAMPLES / "imdb_review.py"), "--dir", str(tmp_path),

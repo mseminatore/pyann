@@ -207,6 +207,7 @@ int ann_set_input_noise(PNetwork pnet, Noise_type type, real amount, real low, r
 int ann_get_input_noise(const PNetwork pnet, Noise_type *type, real *amount, real *low, real *high);
 int ann_apply_input_noise(const PNetwork pnet, real *values, int count);
 void ann_set_weight_init(PNetwork pnet, Weight_init_type init_type);
+void ann_set_seed(unsigned seed);
 
 // Regularization
 void ann_set_weight_decay(PNetwork pnet, real lambda);

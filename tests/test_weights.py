@@ -324,3 +324,29 @@ class TestWeightsFiles:
             assert not back.is_trainable(0) and back.is_trainable(1) and not back.is_trainable(-1)
             assert back.layers[0].trainable is False
             assert "(frozen)" in back.summary().splitlines()[3]
+
+
+class TestSeeds:
+    def test_same_seed_same_training(self, texts):
+        x, y = texts
+        runs = []
+        for seed in (11, 11, 12):
+            pyann.set_seed(seed)
+            model = text_model()
+            model.fit(x, y, epochs=2, verbose=0)
+            runs.append(model.get_weights())
+        # the same start, shuffles and dropout; a threaded BLAS (Accelerate) or a GPU may round
+        # the sums differently, but nowhere near what another seed changes
+        assert all(np.allclose(a, b, atol=1e-3) for a, b in zip(runs[0], runs[1]))
+        assert np.abs(runs[0][0] - runs[2][0]).max() > 0.01
+
+    def test_bad_seeds(self):
+        for seed in (-1, 2 ** 32, 1.5, True, "3"):
+            with pytest.raises(ValueError):
+                pyann.set_seed(seed)
+
+    def test_embedding_starts_small(self):
+        pyann.set_seed(1)
+        vectors = text_model().get_layer_weights(0)[0]
+        assert np.abs(vectors).max() <= 0.05 and not vectors[0].any()      # row 0 is the padding id
+        assert 0.02 < vectors[1:].std() < 0.04

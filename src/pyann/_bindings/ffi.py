@@ -331,6 +331,26 @@ def set_num_threads(threads: int) -> None:
     _lib.ann_set_num_threads(threads)
 
 
+def set_seed(seed: int) -> None:
+    """Seed libann's random numbers, so training repeats exactly.
+
+    Covers everything libann draws at random: weight initialization, the
+    order samples are shuffled in each epoch, dropout masks, input noise and
+    the hyperparameter searches. With the same seed, data and settings, a CPU
+    run trains the same weights every time, with any thread count (a GPU or
+    a threaded BLAS library may still round differently). Call it before
+    building and training the model. NumPy's and Python's own random
+    generators are separate (e.g. ``split_data(seed=...)``).
+
+    Args:
+        seed: An int from 0 to 2**32 - 1
+    """
+    if not isinstance(seed, int) or isinstance(seed, bool) or not 0 <= seed < 2 ** 32:
+        raise ValueError(f"seed must be an int in [0, 2**32), got {seed!r}")
+    _load_library()
+    _lib.ann_set_seed(seed)
+
+
 def get_num_threads() -> int:
     """Return the number of CPU threads libann uses (the calling thread included)."""
     _load_library()
