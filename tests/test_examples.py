@@ -103,11 +103,26 @@ class TestStandaloneExamples:
         lines = [w + " " + " ".join(f"{v:.3f}" for v in rng.normal(size=100))
                  for w in good + bad + filler[:3]]
         vectors.write_bytes(("\n".join(lines) + "\n").encode())
-        out = run_example("imdb_glove.py", "--csv", str(csv), "--glove", str(vectors), "-e", "1", cwd=tmp_path)
+        saved = tmp_path / "imdb"
+        out = run_example("imdb_glove.py", "--csv", str(csv), "--glove", str(vectors), "-e", "1",
+                          "--save-dir", str(saved), cwd=tmp_path)
         assert "learned from scratch:" in out and "GloVe, frozen:" in out and "GloVe, then fine-tuned:" in out
         assert "9 of" in out                         # vectors for 9 of the vocabulary's words
         assert "same predictions" in out
         assert "int8:" in out and "imdb_q_predict(ids" in out
+        assert (saved / "imdb_q.h").exists() and (saved / "ann_rt.h").exists()
+
+        # the review demo loads what it saved
+        for extra in ([], ["--int8"]):
+            out = run_example("imdb_review.py", "--dir", str(saved), "--text", "the film was great",
+                              "--text", "the plot was boring and dull", *extra, cwd=tmp_path)
+            assert out.count("positive:") == 2 and ("int8 model" in out) == bool(extra)
+            assert "great (" in out or "boring (" in out or "dull (" in out
+
+    def test_imdb_review_without_a_model(self, tmp_path):
+        env_out = subprocess.run([sys.executable, str(EXAMPLES / "imdb_review.py"), "--dir", str(tmp_path),
+                                  "--text", "x"], cwd=tmp_path, capture_output=True, text=True)
+        assert env_out.returncode != 0 and "run imdb_glove.py first" in env_out.stderr
 
     def test_online_learning(self, tmp_path):
         out = run_example("online_learning.py", "--batches", "40", cwd=tmp_path)

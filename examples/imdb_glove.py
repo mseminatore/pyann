@@ -4,7 +4,8 @@ IMDB reviews: word vectors learned from scratch vs pre-trained GloVe vectors
 
 50,000 movie reviews labelled positive or negative. Each review becomes a row
 of word ids (pyann's Tokenizer, with strip_html for the reviews' <br /> tags),
-and one network shape learns them three ways:
+with its contractions split as GloVe's text was ("don't" becomes "do n't",
+so both pieces have vectors), and one network shape learns them three ways:
 
   1. Embedding learned from scratch, with the rest of the network
   2. Embedding started from GloVe vectors (trained on 6 billion words of
@@ -22,6 +23,10 @@ with get_layer_weights), keeps the last model's weights in a .npz file
 (save_weights / load_weights), and quantizes it to int8 for a C header:
 the 20,000-word table, most of the model, becomes a quarter of its size.
 
+The last model is saved with its tokenizer in --save-dir (examples/data/imdb
+by default) for imdb_review.py, which predicts the sentiment of reviews you
+type.
+
 Data, downloaded once into examples/data/:
   - the reviews: Stanford's aclImdb archive (84 MB; official 25k train and
     25k test split), or the Kaggle CSV "IMDB Dataset.csv" with --csv
@@ -33,10 +38,11 @@ Data, downloaded once into examples/data/:
 
 Usage:
     python imdb_glove.py [--csv "IMDB Dataset.csv"] [--glove FILE | --download-glove]
-                         [-e EPOCHS] [--limit N] [--gpu]
+                         [-e EPOCHS] [--limit N] [--gpu] [--save-dir DIR]
 """
 
 import argparse
+import json
 import os
 import random
 import sys
@@ -50,7 +56,7 @@ from pathlib import Path
 import numpy as np
 
 from pyann import (Sequential, Embedding, Conv1D, GlobalMaxPooling1D, Dense, Tokenizer, load_word_vectors,
-                   pad_sequences, strip_html)
+                   pad_sequences, split_contractions, strip_html)
 from pyann.utils import load_text_csv, one_hot_encode
 from example_data import DATA_DIR, setup_backend
 
@@ -166,6 +172,8 @@ def main() -> int:
     parser.add_argument("-e", "--epochs", type=int, default=3, help="training epochs per model (default: 3)")
     parser.add_argument("--limit", type=int, help="use at most this many training reviews")
     parser.add_argument("--gpu", action="store_true", help="train on the GPU when available")
+    parser.add_argument("--save-dir", default=str(DATA_DIR / "imdb"),
+                        help="where to save the model for imdb_review.py (default: examples/data/imdb)")
     args = parser.parse_args()
     setup_backend(args.gpu)
 
@@ -174,8 +182,10 @@ def main() -> int:
         train_texts, train_labels = train_texts[:args.limit], train_labels[:args.limit]
     print(f"{len(train_texts)} training, {len(val_texts)} validation and {len(test_texts)} test reviews\n")
 
-    # the vocabulary comes from the training reviews only
-    tok = Tokenizer(num_words=VOCAB, oov_token="<unk>", preprocess=strip_html).fit_on_texts(train_texts)
+    # the vocabulary comes from the training reviews only; contractions are split as
+    # GloVe's text was ("don't" -> "do n't"), so the pieces have vectors
+    tok = Tokenizer(num_words=VOCAB, oov_token="<unk>",
+                    preprocess=[strip_html, split_contractions]).fit_on_texts(train_texts)
 
     def rows(texts, labels):
         x = pad_sequences(tok.texts_to_sequences(texts), maxlen=MAX_LEN, truncating="pre")
@@ -227,7 +237,21 @@ def main() -> int:
         print(f"int8: {q.evaluate(x_test, y_test):.1%} test accuracy (float32 {final.evaluate(x_test, y_test):.1%}); "
               f"parameters {params * 4 / 1e6:.1f} MB as float32, about {params / 1e6:.1f} MB as int8 "
               f"(C header imdb_q.h: imdb_q_predict(ids, out, ws))")
+
+    save_for_review(Path(args.save_dir), final, tok, data[0][0], q)
     return 0
+
+
+def save_for_review(folder: Path, model: Sequential, tok: Tokenizer, x_train: np.ndarray, q) -> None:
+    """What imdb_review.py loads: the model, its tokenizer, how texts become
+    rows, training rows to calibrate int8 on, and the int8 C header."""
+    folder.mkdir(parents=True, exist_ok=True)
+    model.save(folder / "model.nnb", format="binary")
+    (folder / "tokenizer.json").write_text(tok.to_json())
+    (folder / "settings.json").write_text(json.dumps({"maxlen": MAX_LEN, "truncating": "pre"}))
+    np.save(folder / "calibration.npy", x_train[:1000])
+    q.export_c_header(folder / "imdb_q.h", "imdb_q")    # and ann_rt.h beside it
+    print(f"\nSaved the model and tokenizer in {folder}: try python imdb_review.py")
 
 
 if __name__ == "__main__":
