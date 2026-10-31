@@ -5,11 +5,13 @@ __pycache__/
 
 activity_deploy/
 fashion_deploy/
+texture_deploy/
 
 # data files
 fashion-mnist_train.csv
 fashion-mnist_test.csv
 fashion_mnist.nna
+texture_upscale.png
 
 # C extensions
 *.so

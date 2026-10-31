@@ -124,6 +124,24 @@ class TestStandaloneExamples:
                                   "--text", "x"], cwd=tmp_path, capture_output=True, text=True)
         assert env_out.returncode != 0 and "run imdb_glove.py first" in env_out.stderr
 
+    def test_texture_upscale(self, tmp_path):
+        sys.path.insert(0, str(EXAMPLES))
+        try:
+            from example_data import read_png, write_rgb_png
+        finally:
+            sys.path.remove(str(EXAMPLES))
+        # a small odd-sized texture: it is cropped to even sizes, halved and upscaled
+        image = np.random.default_rng(0).random((3, 21, 30)).astype(np.float32)
+        write_rgb_png(tmp_path / "mine.png", image)
+        assert np.abs(read_png(tmp_path / "mine.png") - image).max() <= 0.5 / 255 + 1e-6
+
+        out = run_example("texture_upscale.py", "-e", "1", "--patches", "60", "--image", "mine.png", cwd=tmp_path)
+        assert "PSNR in dB" in out and "int8 vs float32" in out
+        assert (tmp_path / "texture_upscale.png").read_bytes().startswith(b"\x89PNG")
+        assert read_png(tmp_path / "mine_2x.png").shape == (3, 40, 60)
+        assert (tmp_path / "texture_deploy" / "texture_q.h").exists()
+        assert (tmp_path / "texture_deploy" / "ann_rt.h").exists()
+
     def test_online_learning(self, tmp_path):
         out = run_example("online_learning.py", "--batches", "40", cwd=tmp_path)
         assert "saved and reloaded" in out

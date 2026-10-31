@@ -113,13 +113,80 @@ def write_png(path, rows, zoom: int = 2, gap: int = 4) -> None:
             big = np.kron(pixels, np.ones((zoom, zoom), dtype=np.float32))
             y0, x0 = gap + i * (side + gap), gap + j * (side + gap)
             picture[y0:y0 + side, x0:x0 + side] = (big * 255 + 0.5).astype(np.uint8)
+    _write_png_bytes(path, picture)
+
+
+def write_rgb_png(path, picture) -> None:
+    """Write an RGB picture with values in [0, 1], (3, H, W) or (H, W, 3), as a PNG."""
+    picture = np.asarray(picture, dtype=np.float32)
+    if picture.shape[0] == 3 and picture.shape[-1] != 3:
+        picture = picture.transpose(1, 2, 0)
+    _write_png_bytes(path, (np.clip(picture, 0, 1) * 255 + 0.5).astype(np.uint8))
+
+
+def _write_png_bytes(path, picture: np.ndarray) -> None:
+    """Write uint8 pixels, (H, W) grayscale or (H, W, 3) RGB, as a PNG."""
+    height, width = picture.shape[:2]
+    color_type = 2 if picture.ndim == 3 else 0
 
     def chunk(kind: bytes, data: bytes) -> bytes:
         return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
 
     raw = b"".join(b"\x00" + picture[y].tobytes() for y in range(height))
     png = (b"\x89PNG\r\n\x1a\n"
-           + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 0, 0, 0, 0))
+           + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, color_type, 0, 0, 0))
            + chunk(b"IDAT", zlib.compress(raw, 9))
            + chunk(b"IEND", b""))
     Path(path).write_bytes(png)
+
+
+def read_png(path) -> np.ndarray:
+    """Read an 8-bit PNG (grayscale, RGB, with or without alpha) as float32 RGB (3, H, W) in [0, 1].
+
+    Handles what most texture files use; palette, 16-bit and interlaced PNGs
+    are rejected (convert them to 8-bit RGB first).
+    """
+    data = Path(path).read_bytes()
+    if not data.startswith(b"\x89PNG\r\n\x1a\n"):
+        raise ValueError(f"{path} is not a PNG file")
+    pos, idat, header = 8, [], None
+    while pos < len(data):
+        length, kind = struct.unpack(">I4s", data[pos:pos + 8])
+        body = data[pos + 8:pos + 8 + length]
+        if kind == b"IHDR":
+            header = struct.unpack(">IIBBBBB", body)
+        elif kind == b"IDAT":
+            idat.append(body)
+        pos += 12 + length
+    width, height, depth, color_type, _, _, interlace = header
+    channels = {0: 1, 2: 3, 4: 2, 6: 4}.get(color_type)
+    if depth != 8 or channels is None or interlace:
+        raise ValueError(f"{path}: only 8-bit, non-interlaced grayscale or RGB(A) PNGs are supported")
+
+    raw = zlib.decompress(b"".join(idat))
+    stride = width * channels
+    pixels = np.zeros((height, stride), dtype=np.uint8)
+    prior = bytearray(stride)
+    for y in range(height):
+        kind, row = raw[y * (stride + 1)], bytearray(raw[y * (stride + 1) + 1:(y + 1) * (stride + 1)])
+        if kind == 2:                                           # Up
+            row = bytearray((a + b) & 255 for a, b in zip(row, prior))
+        elif kind in (1, 3, 4):                                 # Sub, Average, Paeth
+            for i in range(stride):
+                left = row[i - channels] if i >= channels else 0
+                if kind == 1:
+                    row[i] = (row[i] + left) & 255
+                elif kind == 3:
+                    row[i] = (row[i] + ((left + prior[i]) >> 1)) & 255
+                else:
+                    up_left = prior[i - channels] if i >= channels else 0
+                    p = left + prior[i] - up_left
+                    pa, pb, pc = abs(p - left), abs(p - prior[i]), abs(p - up_left)
+                    best = left if pa <= pb and pa <= pc else prior[i] if pb <= pc else up_left
+                    row[i] = (row[i] + best) & 255
+        pixels[y] = np.frombuffer(bytes(row), dtype=np.uint8)
+        prior = row
+    image = pixels.reshape(height, width, channels)[:, :, :3 if channels >= 3 else 1]
+    if image.shape[2] == 1:
+        image = np.repeat(image, 3, axis=2)
+    return image.transpose(2, 0, 1).astype(np.float32) / np.float32(255.0)
