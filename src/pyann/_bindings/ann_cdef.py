@@ -56,6 +56,11 @@ typedef enum {
     LOSS_DEFAULT = 0        // LOSS_MSE
 } Loss_type;
 
+typedef enum {
+    LOSS_REDUCTION_SUM,
+    LOSS_REDUCTION_MEAN
+} Loss_reduction;
+
 // Optimizer types
 typedef enum {
     OPT_SGD,
@@ -194,6 +199,8 @@ real ann_evaluate_loss(const PNetwork pnet, const PTensor inputs, const PTensor 
 void ann_set_learning_rate(PNetwork pnet, real lr);
 void ann_set_convergence(PNetwork pnet, real epsilon);
 void ann_set_loss_function(PNetwork pnet, Loss_type loss);
+int ann_set_loss_reduction(PNetwork pnet, Loss_reduction reduction);
+Loss_reduction ann_get_loss_reduction(const PNetwork pnet);
 void ann_set_batch_size(PNetwork pnet, unsigned batch_size);
 void ann_set_epoch_limit(PNetwork pnet, unsigned epochs);
 int ann_set_validation_data(PNetwork pnet, PTensor inputs, PTensor outputs);

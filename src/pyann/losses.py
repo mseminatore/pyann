@@ -63,3 +63,35 @@ def parse_loss(loss: Union[str, Loss]) -> Loss:
     if isinstance(loss, str):
         return Loss.from_string(loss)
     raise TypeError(f"loss must be str or Loss, got {type(loss)}")
+
+
+class LossReduction(IntEnum):
+    """How training combines a batch's errors, matching libann's Loss_reduction enum.
+
+    The reported loss is always a mean (MSE over the batch and the outputs,
+    cross-entropy over the batch). SUM, libann's default, trains on the
+    gradient summed over the batch, and for MSE on half the summed squared
+    errors over the outputs, so SGD steps grow with the batch size and the
+    number of outputs. MEAN trains on the gradient of the reported loss, as
+    Keras and PyTorch do.
+    """
+
+    SUM = 0     # LOSS_REDUCTION_SUM
+    MEAN = 1    # LOSS_REDUCTION_MEAN
+
+    @classmethod
+    def from_string(cls, name: str) -> "LossReduction":
+        """Convert "sum" or "mean" (any case) to a LossReduction."""
+        try:
+            return cls[name.upper()]
+        except KeyError:
+            raise ValueError(f"Unknown loss reduction '{name}'. Valid options: mean, sum") from None
+
+
+def parse_loss_reduction(reduction: Union[str, LossReduction]) -> LossReduction:
+    """Parse a loss reduction argument (string or enum) to a LossReduction."""
+    if isinstance(reduction, LossReduction):
+        return reduction
+    if isinstance(reduction, str):
+        return LossReduction.from_string(reduction)
+    raise TypeError(f"loss_reduction must be str or LossReduction, got {type(reduction)}")

@@ -12,7 +12,7 @@ from pyann.core.layers import (
 from pyann.core.layers import _ConvBase, _PoolBase
 from pyann.core.tensor import Tensor
 from pyann.activations import Activation
-from pyann.losses import Loss, parse_loss
+from pyann.losses import Loss, LossReduction, parse_loss, parse_loss_reduction
 from pyann.optimizers import Optimizer, parse_optimizer, OptimizerType
 from pyann.weight_init import WeightInit, parse_weight_init
 from pyann.callbacks import (
@@ -150,6 +150,7 @@ class Sequential:
     _weight_decay: Optional[float] = None
     _l1_regularization: Optional[float] = None
     _gradient_clip: Optional[float] = None
+    _loss_reduction: Optional[LossReduction] = None
     _weight_init: Optional[WeightInit] = None
     _convergence: Optional[float] = None
     _dropout: Optional[float] = None
@@ -213,7 +214,8 @@ class Sequential:
         gradient_clip: Optional[float] = None,
         weight_init: Union[str, WeightInit, None] = None,
         convergence: Optional[float] = None,
-        dropout: Optional[float] = None
+        dropout: Optional[float] = None,
+        loss_reduction: Union[str, LossReduction, None] = None
     ) -> "Sequential":
         """Configure the model for training.
         
@@ -231,6 +233,13 @@ class Sequential:
                 this value (libann's default is 0.01)
             dropout: Default dropout rate for hidden layers that don't set
                 their own via Dense(dropout=...), in [0, 1)
+            loss_reduction: 'sum' (libann's default) trains on the gradient
+                summed over the batch, and for MSE on half the summed
+                squared errors over the outputs; 'mean' trains on the
+                gradient of the reported loss, as Keras and PyTorch do, so
+                SGD learning rates, weight decay and gradient clipping carry
+                over between batch sizes, output sizes and those frameworks.
+                Adam mostly cancels the scale out
             
         Returns:
             self for method chaining
@@ -243,6 +252,8 @@ class Sequential:
             raise ValueError(f"dropout must be in [0, 1), got {dropout}")
         if weight_init is not None:
             weight_init = parse_weight_init(weight_init)
+        if loss_reduction is not None:
+            loss_reduction = parse_loss_reduction(loss_reduction)
 
         if optimizer is not None:
             self._optimizer = parse_optimizer(optimizer)
@@ -268,6 +279,8 @@ class Sequential:
             self._convergence = convergence
         if dropout is not None:
             self._dropout = dropout
+        if loss_reduction is not None:
+            self._loss_reduction = loss_reduction
         
         # Settings changed after the network exists take effect immediately
         if self._built:
@@ -495,6 +508,9 @@ class Sequential:
             lib.ann_set_weight_init(self._ptr, int(self._weight_init))
         if self._convergence is not None:
             lib.ann_set_convergence(self._ptr, self._convergence)
+        if self._loss_reduction is not None:
+            raise_for_error_code(lib.ann_set_loss_reduction(self._ptr, int(self._loss_reduction)),
+                                 "Failed to set the loss reduction")
         # Applies only to hidden layers without their own rate, so it must run
         # after the layers (and their Dense(dropout=...) overrides) are in place
         if self._dropout is not None:
@@ -1323,6 +1339,14 @@ class Sequential:
             else:
                 self._apply_training_settings()
         return self
+
+    @property
+    def loss_reduction(self) -> LossReduction:
+        """How training combines a batch's errors (see compile's
+        loss_reduction); SUM unless compile() set it."""
+        if self._built:
+            return LossReduction(lib.ann_get_loss_reduction(self._ptr))
+        return self._loss_reduction if self._loss_reduction is not None else LossReduction.SUM
 
     @property
     def input_noise(self) -> Optional[Tuple[str, float, Optional[Tuple[float, float]]]]:

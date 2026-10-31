@@ -24,7 +24,7 @@ from pyann.core.layers import (
 )
 from pyann.text import Tokenizer, pad_sequences, strip_html, split_contractions, load_word_vectors
 from pyann.optimizers import Optimizer, SGD, Momentum, RMSProp, AdaGrad, Adam
-from pyann.losses import Loss
+from pyann.losses import Loss, LossReduction
 from pyann.activations import Activation
 from pyann.weight_init import WeightInit
 from pyann._bindings.ffi import (
@@ -75,6 +75,7 @@ __all__ = [
     "AdaGrad",
     "Adam",
     "Loss",
+    "LossReduction",
     "Activation",
     "WeightInit",
     "backend_info",
