@@ -77,7 +77,7 @@ class TestLossReduction:
         assert model.loss_reduction == LossReduction.SUM
         model.compile(loss_reduction="mean")
         assert model.loss_reduction == LossReduction.MEAN
-        model.get_weights()                              # builds the network
+        model._build()                                   # the C network (get_weights would need NumPy)
         assert lib.ann_get_loss_reduction(model._ptr) == lib.LOSS_REDUCTION_MEAN
         model.compile(loss_reduction=LossReduction.SUM)  # a built model changes at once
         assert lib.ann_get_loss_reduction(model._ptr) == lib.LOSS_REDUCTION_SUM

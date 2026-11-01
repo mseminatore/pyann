@@ -326,6 +326,24 @@ class TestWeightsFiles:
             assert "(frozen)" in back.summary().splitlines()[3]
 
 
+def test_weights_need_numpy(monkeypatch):
+    """Without NumPy the weights API says so, rather than failing to import it."""
+    import builtins
+    real_import = builtins.__import__
+
+    def no_numpy(name, *args, **kwargs):
+        if name == "numpy" or name.startswith("numpy."):
+            raise ImportError("No module named 'numpy'")
+        return real_import(name, *args, **kwargs)
+
+    model = Sequential([Input((2,)), Dense(2)]).compile(loss="mse")
+    monkeypatch.setattr(builtins, "__import__", no_numpy)
+    with pytest.raises(ImportError, match="get_layer_weights needs NumPy"):
+        model.get_layer_weights(0)
+    with pytest.raises(ImportError, match="save_weights needs NumPy"):
+        model.save_weights("unused.npz")
+
+
 class TestSeeds:
     def test_same_seed_same_training(self, texts):
         x, y = texts
