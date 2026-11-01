@@ -59,18 +59,24 @@ import sys
 import tarfile
 import tempfile
 import time
+import urllib.error
 import urllib.request
 import zipfile
 from pathlib import Path
 
 import numpy as np
 
-from pyann import (Sequential, Embedding, Conv1D, GlobalMaxPooling1D, Dense, Tokenizer, load_word_vectors,
-                   pad_sequences, set_seed, split_contractions, strip_html)
-from pyann.utils import load_text_csv, one_hot_encode
+try:
+    from pyann import (Sequential, Embedding, Conv1D, GlobalMaxPooling1D, Dense, Tokenizer, load_word_vectors,
+                       pad_sequences, set_seed, split_contractions, strip_html)
+    from pyann.utils import load_text_csv, one_hot_encode
+except ImportError as e:
+    sys.exit(f"This example needs the pyann in this repository, newer than the installed one ({e}).\n"
+             "From the repository root: pip install -e .")
 from example_data import DATA_DIR, setup_backend
 
 IMDB_URL = "http://ai.stanford.edu/~amaas/data/sentiment/aclImdb_v1.tar.gz"
+KAGGLE_IMDB = "lakshmi25npathi/imdb-dataset-of-50k-movie-reviews"     # its "IMDB Dataset.csv"
 GLOVE_URL = "https://huggingface.co/stanfordnlp/glove/resolve/main/glove.6B.zip"
 GLOVE_FILE = "glove.6B.100d.txt"
 VOCAB = 20000       # most frequent training words kept
@@ -79,14 +85,35 @@ DIM = 100           # vector length (GloVe's 100-dimension file)
 PROBES = ["great", "awful", "boring", "funny"]
 
 
+class DownloadError(Exception):
+    pass
+
+
 def download(url: str, path: Path) -> Path:
     if not path.exists():
         path.parent.mkdir(parents=True, exist_ok=True)
         print(f"Downloading {url} ...", flush=True)
         tmp = path.with_suffix(path.suffix + ".part")
-        urllib.request.urlretrieve(url, tmp)
+        try:
+            urllib.request.urlretrieve(url, tmp)
+        except (OSError, urllib.error.URLError) as e:     # no connection, refused, timed out, HTTP errors
+            tmp.unlink(missing_ok=True)
+            raise DownloadError(f"could not download {url}: {getattr(e, 'reason', e)}") from None
         tmp.replace(path)
     return path
+
+
+def kaggle_csv() -> Path:
+    """Kaggle's IMDB CSV through kagglehub (pip install kagglehub), when Stanford's server can't be reached."""
+    try:
+        import kagglehub
+    except ImportError:
+        raise DownloadError("kagglehub is not installed") from None
+    print(f"Downloading the Kaggle dataset {KAGGLE_IMDB} with kagglehub ...", flush=True)
+    try:
+        return Path(kagglehub.dataset_download(KAGGLE_IMDB)) / "IMDB Dataset.csv"
+    except Exception as e:      # kagglehub raises its own errors for network and authentication failures
+        raise DownloadError(f"kagglehub could not download {KAGGLE_IMDB}: {e}") from None
 
 
 def split(texts, labels, fractions, seed=1):
@@ -112,7 +139,16 @@ def load_reviews(csv: str = None):
         # split before anything learns from the texts, the tokenizer included
         return split(texts, labels, (0.8, 0.1, 0.1))
 
-    archive = download(IMDB_URL, DATA_DIR / "aclImdb_v1.tar.gz")
+    try:
+        archive = download(IMDB_URL, DATA_DIR / "aclImdb_v1.tar.gz")
+    except DownloadError as stanford:
+        print(f"{stanford}; trying Kaggle's copy instead", flush=True)
+        try:
+            return load_reviews(str(kaggle_csv()))
+        except DownloadError as kaggle:
+            sys.exit(f"No reviews: {stanford}, and {kaggle}.\n"
+                     f'Download "IMDB Dataset.csv" from https://www.kaggle.com/datasets/{KAGGLE_IMDB} '
+                     f"and pass it with --csv, or install kagglehub (pip install kagglehub).")
     print(f"Reading {archive} ...", flush=True)
     sets = {"train": ([], []), "test": ([], [])}
     with tarfile.open(archive, "r:gz") as tar:
@@ -134,7 +170,10 @@ def glove_path(args):
         return path
     if not args.download_glove:
         return None
-    archive = download(GLOVE_URL, DATA_DIR / "glove.6B.zip")
+    try:
+        archive = download(GLOVE_URL, DATA_DIR / "glove.6B.zip")
+    except DownloadError as e:
+        sys.exit(f"No GloVe vectors: {e}.\nDownload glove.6B.zip yourself and pass its {GLOVE_FILE} with --glove.")
     print(f"Extracting {GLOVE_FILE} ...", flush=True)
     with zipfile.ZipFile(archive) as z, z.open(GLOVE_FILE) as src, open(path, "wb") as dst:
         while chunk := src.read(1 << 20):
