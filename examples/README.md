@@ -30,6 +30,15 @@ Kaggle's `IMDB Dataset.csv` with `--csv`; GloVe vectors with `--download-glove` 
 | [`imdb_glove.py`](imdb_glove.py) | Sentiment of 50,000 movie reviews: `load_text_csv`, `Tokenizer(preprocess=[strip_html, split_contractions])` fitted on the training reviews only, an `Embedding` learned from scratch vs pre-trained GloVe vectors (`load_word_vectors`, `Embedding(weights=..., trainable=False)`), then fine-tuned with `set_trainable`; nearest words from `get_layer_weights`; `save_weights` / `load_weights`; int8 quantization for a C header that takes token ids | 90.3% from scratch (GloVe's vectors put "good" and "bad" close together: 87.9% frozen, 88.5% fine-tuned), 90.4% as int8 (8.3 MB of parameters to 2.1 MB); about 5 min on a 4-core Intel Mac CPU |
 | [`imdb_review.py`](imdb_review.py) | Loads the model `imdb_glove.py` saved, with its tokenizer, and predicts reviews you type (or `--text`); shows which words decided it, by predicting again without each one; `--int8` uses the int8 model | instant, after `imdb_glove.py` |
 
+## Speech Commands
+
+Downloads Google's mini Speech Commands (8,000 one-second clips of eight words, 182 MB) into
+`examples/data/` the first time; `--synthetic` uses made-up tone "words" instead.
+
+| Example | Shows | Result |
+|---|---|---|
+| [`keyword_spotting.py`](keyword_spotting.py) | Spoken-word recognition for a microcontroller: NumPy log-mel spectrograms (49 frames x 40 bands), a depthwise-separable CNN (`DepthwiseConv2D`, 1x1 `Conv2D`, `BatchNormalization`, `GlobalAveragePooling2D`), clips split by speaker, time-shift and noise augmentation, a "(none)" class from noise and partial words; a sliding-window detector over a stream of words (smoothed probabilities, one detection per peak); `--wav` for your own recording; int8 C header | 87% on speakers it never heard (87% as int8) with 7.3k parameters; the detector hears about three in four words in a stream; about 2.5 min on Metal |
+
 ## Fashion-MNIST
 
 | Example | Shows | Result |
