@@ -30,6 +30,15 @@ if TYPE_CHECKING:
     from pyann.core.quantized import QuantizedModel
 
 
+def _numpy(feature: str):
+    """NumPy, or an ImportError that says the feature needs it."""
+    try:
+        import numpy
+    except ImportError:
+        raise ImportError(f"{feature} needs NumPy (pip install numpy)") from None
+    return numpy
+
+
 def _batch_buffer(data: ArrayLike, columns: int, name: str):
     """Convert one mini-batch to a C float buffer, checking its shape.
     
@@ -864,13 +873,14 @@ class Sequential:
         Other layers have none ([]).
 
         Before the first training (and without set_layer_weights or a load)
-        the values are the ones the layer was created with: zero weights.
+        reading a layer initializes it, so the values are what training
+        starts from. Needs NumPy.
 
         Args:
             layer: Position in ``model.layers`` (negative counts from the
                 end), or the layer itself
         """
-        import numpy as np
+        np = _numpy("get_layer_weights")
         self._build()
         index = self._layer_index(layer)
         dims = ffi.new("int[2]")
@@ -900,7 +910,7 @@ class Sequential:
         Returns:
             self for method chaining
         """
-        import numpy as np
+        np = _numpy("set_layer_weights")
         current = self.get_layer_weights(layer)
         index = self._layer_index(layer)
         name = type(self._layers[index - 1]).__name__
@@ -937,7 +947,7 @@ class Sequential:
         if len(weights) != sum(counts):
             raise ValueError(f"the model has {sum(counts)} parameter arrays, got {len(weights)}")
         # check every shape before changing anything
-        import numpy as np
+        np = _numpy("set_weights")
         for p, (w, old) in enumerate(zip(weights, self.get_weights())):
             if np.shape(w) != old.shape:
                 raise ValueError(f"weights[{p}] has shape {np.shape(w)}, expected {old.shape}")
@@ -957,7 +967,7 @@ class Sequential:
         The file holds ``layer<i>.<p>`` arrays (parameter p of model.layers[i])
         and ``layers``, the layer class names.
         """
-        import numpy as np
+        np = _numpy("save_weights")
         self._build()
         arrays = {"layers": np.array([type(layer).__name__ for layer in self._layers])}
         for i in range(len(self._layers)):
@@ -975,7 +985,7 @@ class Sequential:
         Returns:
             self for method chaining
         """
-        import numpy as np
+        np = _numpy("load_weights")
         self._build()
         keys = [f"layer{i}.{p}" for i in range(len(self._layers))
                 for p in range(lib.ann_get_layer_param_count(self._ptr, i + 1))]
