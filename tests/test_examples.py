@@ -4,6 +4,7 @@ The Fashion-MNIST examples get small synthetic CSV files in the Kaggle format,
 so nothing is downloaded, and short settings keep each run to a few seconds.
 """
 
+import json
 import os
 import shutil
 import subprocess
@@ -158,6 +159,36 @@ class TestStandaloneExamples:
         assert "test words separated by noise" in out and "false alarms" in out
         assert "mine.wav: " in out
         assert (tmp_path / "kws_deploy" / "kws_q.h").exists()
+        assert (tmp_path / "kws_deploy" / "kws.js").exists() and (tmp_path / "kws_deploy" / "ann_rt.js").exists()
+        for name in ("index.html", "frontend.js", "kws_frontend.json"):
+            assert (tmp_path / "kws_deploy" / name).exists()
+
+        # the browser demo's front end makes the features NumPy does, and the model runs on them
+        if shutil.which("node"):
+            sys.path.insert(0, str(EXAMPLES))
+            try:
+                import keyword_spotting as kws
+            finally:
+                sys.path.remove(str(EXAMPLES))
+            fe = json.loads((tmp_path / "kws_deploy" / "kws_frontend.json").read_text())
+            clips = np.stack([kws.synthetic_word(np.random.default_rng(i), i) for i in range(3)])
+            expected = (kws.log_mel(clips) - np.float32(fe["mean"])) / np.float32(fe["std"])
+            (tmp_path / "clips.json").write_text(json.dumps(clips.tolist()))
+            (tmp_path / "kws_deploy" / "check.mjs").write_text(
+                'import { readFileSync } from "node:fs";\n'
+                'import { makeFrontend } from "./frontend.js";\n'
+                'import { predict } from "./kws.js";\n'
+                'const fe = makeFrontend(JSON.parse(readFileSync("kws_frontend.json", "utf8")));\n'
+                'const clips = JSON.parse(readFileSync("../clips.json", "utf8"));\n'
+                'const feats = clips.map(c => fe.features(Float32Array.from(c)));\n'
+                'console.log(JSON.stringify({ features: feats.map(f => Array.from(f)),\n'
+                '                             probs: feats.map(f => Array.from(predict(f))) }));\n')
+            result = subprocess.run(["node", "check.mjs"], cwd=tmp_path / "kws_deploy", capture_output=True, text=True)
+            assert result.returncode == 0, result.stderr
+            got = json.loads(result.stdout)
+            np.testing.assert_allclose(np.array(got["features"]), expected.reshape(3, -1), rtol=1e-4, atol=1e-4)
+            probs = np.array(got["probs"])
+            assert probs.shape == (3, len(kws.CLASSES)) and np.allclose(probs.sum(axis=1), 1, atol=1e-5)
         assert (tmp_path / "kws_deploy" / "ann_rt.h").exists()
 
     def test_online_learning(self, tmp_path):

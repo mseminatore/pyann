@@ -27,8 +27,11 @@ glides) instead, with no download.
 After training, the model listens to a stream of test words separated by
 noise, a second at a time every 100 ms, averages each window's probabilities
 with its neighbors' and reports the words it is sure of. Then it is
-quantized to int8 and exported as a C header; a device also needs the
-log-mel front end (an FFT and the 40 mel filters) to make its inputs.
+quantized to int8 and exported as a C header (a device also needs the log-mel
+front end, an FFT and the 40 mel filters, to make its inputs). The float model
+is exported as a JavaScript module with a browser demo that listens to your
+microphone: serve kws_deploy/ (python -m http.server --directory kws_deploy)
+and open http://localhost:8000.
 Classify your own recording with --wav FILE.wav (mono or stereo, any rate).
 
 Usage:
@@ -37,7 +40,9 @@ Usage:
 
 import argparse
 import io
+import json
 import os
+import shutil
 import time
 import urllib.request
 import wave
@@ -194,6 +199,20 @@ def log_mel(clips: np.ndarray) -> np.ndarray:
     frames = clips[:, idx] * WINDOW                               # (N, FRAMES, FRAME)
     power = np.abs(np.fft.rfft(frames, FFT)) ** 2
     return np.log(power @ MEL.T + 1e-6).astype(np.float32)[:, None]
+
+
+def write_frontend(path, mean: np.ndarray, std: np.ndarray) -> None:
+    """The front end's constants for the browser demo (web/keyword_spotting/frontend.js):
+    each mel filter as its first FFT bin and weights, and the per-band normalization."""
+    filters = []
+    for row in MEL:
+        nonzero = np.flatnonzero(row)
+        start, stop = (int(nonzero[0]), int(nonzero[-1]) + 1) if len(nonzero) else (0, 0)
+        filters.append({"start": start, "weights": [round(float(v), 7) for v in row[start:stop]]})
+    data = {"rate": RATE, "frame": FRAME, "hop": HOP, "fft": FFT, "mels": MELS, "frames": FRAMES,
+            "classes": CLASSES, "filters": filters,
+            "mean": [float(v) for v in mean], "std": [float(v) for v in std]}
+    Path(path).write_text(json.dumps(data))
 
 
 # --- the model ---
@@ -380,6 +399,12 @@ def main() -> int:
     params = sum(w.size for w in model.get_weights())
     print(f"C header: {header} ({params} parameters, about {params / 1024:.1f} KB as int8; "
           f"ann_rt.h beside it)")
+    module = model.export_js(os.path.join(out_dir, "kws.js"))
+    write_frontend(os.path.join(out_dir, "kws_frontend.json"), mean, std)
+    for name in ("index.html", "frontend.js"):
+        shutil.copyfile(Path(__file__).resolve().parent / "web" / "keyword_spotting" / name, os.path.join(out_dir, name))
+    print(f"JavaScript: {module} ({os.path.getsize(module) / 1024:.0f} KB; ann_rt.js beside it) and a browser demo:\n"
+          f"  python -m http.server --directory {out_dir}, then open http://localhost:8000")
     return 0
 
 

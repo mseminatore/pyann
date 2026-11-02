@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Keyword Spotter</title>
+<style>
+	:root {
+		--bg: #f6f5f1; --panel: #ffffff; --text: #1d1d1b; --muted: #6b6a65; --line: #dcdad3;
+		--accent: #2f6fdf; --accent-soft: #dbe6fb; --hit: #1f8a4c;
+	}
+	@media (prefers-color-scheme: dark) {
+		:root {
+			--bg: #151614; --panel: #1f201d; --text: #ecebe6; --muted: #9a9890; --line: #34352f;
+			--accent: #6d9bff; --accent-soft: #263452; --hit: #4cc27f;
+		}
+	}
+	* { box-sizing: border-box; }
+	body { margin: 0; background: var(--bg); color: var(--text);
+		font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+	main { max-width: 760px; margin: 0 auto; padding: 32px 16px 48px; }
+	h1 { font-size: 1.6rem; margin: 0 0 4px; }
+	.lede { color: var(--muted); margin: 0 0 24px; }
+	.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 20px; margin-bottom: 16px; }
+	.controls { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+	button { font: inherit; padding: 10px 18px; border-radius: 8px; border: 0; background: var(--accent);
+		color: #fff; cursor: pointer; }
+	button.secondary { background: transparent; color: var(--text); border: 1px solid var(--line); }
+	button:disabled { opacity: 0.5; cursor: default; }
+	label { color: var(--muted); font-size: 0.9rem; }
+	#status { color: var(--muted); font-size: 0.9rem; min-height: 1.5em; margin-top: 12px; }
+	#word { font-size: 3.2rem; font-weight: 700; text-align: center; min-height: 1.3em; letter-spacing: 0.02em;
+		transition: color 0.3s; }
+	#word.hit { color: var(--hit); }
+	#word.idle { color: var(--muted); font-weight: 400; font-size: 1.4rem; line-height: 2.8; }
+	.bars { display: grid; grid-template-columns: 84px 1fr 48px; gap: 6px 10px; align-items: center; }
+	.bars .name { text-align: right; font-size: 0.95rem; }
+	.bars .track { height: 14px; background: var(--accent-soft); border-radius: 7px; overflow: hidden; }
+	.bars .fill { height: 100%; width: 0; background: var(--accent); transition: width 0.1s linear; }
+	.bars .pct { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 0.85rem; }
+	canvas { width: 100%; height: 140px; border-radius: 8px; display: block; image-rendering: pixelated; }
+	#heard { color: var(--muted); font-size: 0.95rem; }
+	.note { color: var(--muted); font-size: 0.85rem; }
+	code { font-size: 0.9em; }
+</style>
+</head>
+<body>
+<main>
+	<h1>Keyword Spotter</h1>
+	<p class="lede">A 7,300-parameter CNN trained with pyann on Google's mini Speech Commands, running in
+		your browser with libann's JavaScript runtime. Say one of: <b>down, go, left, no, right, stop, up, yes</b>.</p>
+
+	<div class="panel">
+		<div class="controls">
+			<button id="start">Start listening</button>
+			<button id="stop" class="secondary" disabled>Stop</button>
+			<label>Threshold <input id="threshold" type="range" min="0.4" max="0.95" step="0.05" value="0.7">
+				<span id="threshold-value">70%</span></label>
+			<label>Or a WAV file <input id="file" type="file" accept="audio/*"></label>
+		</div>
+		<div id="status">Loading the model…</div>
+	</div>
+
+	<div class="panel">
+		<div id="word" class="idle">waiting for a word</div>
+		<div id="heard"></div>
+	</div>
+
+	<div class="panel">
+		<div class="bars" id="bars"></div>
+	</div>
+
+	<div class="panel">
+		<canvas id="spectrogram" width="49" height="40"></canvas>
+		<p class="note">The last second as the model sees it: 49 frames of 40 mel bands, low pitches at the bottom.</p>
+	</div>
+
+	<p class="note">Everything runs locally; no audio leaves the page. The model heard 1,750 voices on phone-quality
+		recordings, so a quiet room and a clear, one-second word work best. Serve this folder over HTTP
+		(<code>python -m http.server</code>) and open <code>http://localhost:8000</code>: browsers only allow the
+		microphone and module imports from a server.</p>
+</main>
+
+<script type="module">
+import { predict, model } from "./kws.js";
+import { loadFrontend } from "./frontend.js";
+
+const $ = id => document.getElementById(id);
+const fe = await loadFrontend();
+const classes = fe.classes, none = classes.length - 1;
+let threshold = 0.7;
+
+// probability bars
+const fills = classes.map(name => {
+	const row = document.createElement("div");
+	row.style.display = "contents";
+	row.innerHTML = `<div class="name">${name}</div><div class="track"><div class="fill"></div></div><div class="pct">0%</div>`;
+	$("bars").append(row);
+	return [row.querySelector(".fill"), row.querySelector(".pct")];
+});
+function showProbabilities(p) {
+	p.forEach((v, i) => {
+		fills[i][0].style.width = `${(100 * v).toFixed(1)}%`;
+		fills[i][1].textContent = `${Math.round(100 * v)}%`;
+	});
+}
+
+// the spectrogram of the current window, frame by frame, low bands at the bottom
+const canvas = $("spectrogram"), ctx2d = canvas.getContext("2d");
+const image = ctx2d.createImageData(fe.frames, fe.mels);
+function showSpectrogram(features) {
+	for (let t = 0; t < fe.frames; t++)
+		for (let m = 0; m < fe.mels; m++) {
+			const v = Math.max(0, Math.min(1, (features[t * fe.mels + m] + 2.5) / 5));
+			const i = 4 * ((fe.mels - 1 - m) * fe.frames + t);
+			image.data[i] = 30 + 225 * v;
+			image.data[i + 1] = 40 + 150 * v * v;
+			image.data[i + 2] = 90 + 60 * (1 - v);
+			image.data[i + 3] = 255;
+		}
+	ctx2d.putImageData(image, 0, 0);
+}
+
+// one second of samples -> smoothed probabilities -> a word, at most once a second
+const recent = [];
+let lastWord = "", lastTime = -1e9;
+const heard = [];
+function classify(second) {
+	const features = fe.features(second);
+	const start = performance.now();
+	const p = predict(features);
+	const ms = performance.now() - start;
+	showSpectrogram(features);
+	// average each window with the two before it, as keyword_spotting.py's detector does
+	recent.push(p);
+	if (recent.length > 3)
+		recent.shift();
+	const smooth = p.map((_, i) => recent.reduce((s, r) => s + r[i], 0) / recent.length);
+	showProbabilities(smooth);
+	let best = 0;
+	for (let i = 1; i < smooth.length; i++)
+		if (smooth[i] > smooth[best])
+			best = i;
+	const now = performance.now();
+	if (best !== none && smooth[best] >= threshold && (classes[best] !== lastWord || now - lastTime > 1000)) {
+		lastWord = classes[best];
+		heard.unshift(`${lastWord} (${Math.round(100 * smooth[best])}%)`);
+		heard.length = Math.min(heard.length, 8);
+		$("word").textContent = lastWord;
+		$("word").className = "hit";
+		$("heard").textContent = "Heard: " + heard.join(", ");
+	}
+	if (classes[best] === lastWord && best !== none)
+		lastTime = now;
+	else if (now - lastTime > 1500) {
+		$("word").className = "idle";
+		$("word").textContent = "waiting for a word";
+	}
+	return ms;
+}
+
+// --- microphone: an AudioWorklet hands over 100 ms blocks; we keep the last second ---
+const workletCode = `
+class Tap extends AudioWorkletProcessor {
+	constructor() { super(); this.block = new Float32Array(${fe.rate / 10}); this.n = 0; }
+	process(inputs) {
+		const x = inputs[0][0];
+		if (!x) return true;
+		for (let i = 0; i < x.length; i++) {
+			this.block[this.n++] = x[i];
+			if (this.n === this.block.length) { this.port.postMessage(this.block.slice()); this.n = 0; }
+		}
+		return true;
+	}
+}
+registerProcessor("tap", Tap);`;
+
+let audio = null, stream = null;
+const second = new Float32Array(fe.rate);
+
+// linear interpolation from the device rate to 16 kHz, when the browser
+// would not open the audio context at 16 kHz itself
+function resample(block, from) {
+	if (from === fe.rate)
+		return block;
+	const out = new Float32Array(Math.round(block.length * fe.rate / from));
+	for (let i = 0; i < out.length; i++) {
+		const t = i * from / fe.rate, k = Math.floor(t), f = t - k;
+		out[i] = block[Math.min(k, block.length - 1)] * (1 - f) + block[Math.min(k + 1, block.length - 1)] * f;
+	}
+	return out;
+}
+
+async function start() {
+	try {
+		stream = await navigator.mediaDevices.getUserMedia({
+			audio: { channelCount: 1, echoCancellation: false, noiseSuppression: false, autoGainControl: true } });
+		try {
+			audio = new AudioContext({ sampleRate: fe.rate });
+		} catch {
+			audio = new AudioContext();
+		}
+		const url = URL.createObjectURL(new Blob([workletCode], { type: "text/javascript" }));
+		await audio.audioWorklet.addModule(url);
+		const source = audio.createMediaStreamSource(stream);
+		const tap = new AudioWorkletNode(audio, "tap");
+		let times = [];
+		tap.port.onmessage = e => {
+			const block = resample(e.data, audio.sampleRate);
+			second.copyWithin(0, block.length);
+			second.set(block, fe.rate - block.length);
+			times.push(classify(second));
+			if (times.length === 20) {
+				const avg = times.reduce((a, b) => a + b) / times.length;
+				$("status").textContent = `Listening at ${audio.sampleRate} Hz. The model takes ${avg.toFixed(1)} ms per window, ten windows a second.`;
+				times = [];
+			}
+		};
+		source.connect(tap);
+		$("start").disabled = true;
+		$("stop").disabled = false;
+		$("status").textContent = `Listening at ${audio.sampleRate} Hz…`;
+	} catch (err) {
+		$("status").textContent = `Could not open the microphone: ${err.message}`;
+	}
+}
+
+function stop() {
+	stream?.getTracks().forEach(t => t.stop());
+	audio?.close();
+	audio = stream = null;
+	$("start").disabled = false;
+	$("stop").disabled = true;
+	$("status").textContent = "Stopped.";
+}
+
+// --- a WAV (or any audio) file: decoded and resampled to 16 kHz, then the loudest second ---
+async function classifyFile(file) {
+	const offline = new OfflineAudioContext(1, fe.rate, fe.rate);
+	const decoded = await offline.decodeAudioData(await file.arrayBuffer());
+	// mix down and resample to 16 kHz by rendering through an offline context
+	const render = new OfflineAudioContext(1, Math.ceil(decoded.duration * fe.rate), fe.rate);
+	const src = render.createBufferSource();
+	src.buffer = decoded;
+	src.connect(render.destination);
+	src.start();
+	const samples = (await render.startRendering()).getChannelData(0);
+	// the second around the loudest 100 ms, as keyword_spotting.py's fit_clip does
+	let clip = new Float32Array(fe.rate);
+	if (samples.length <= fe.rate)
+		clip.set(samples, Math.floor((fe.rate - samples.length) / 2));
+	else {
+		const w = fe.rate / 10;
+		let energy = 0, best = 0, bestAt = 0;
+		for (let i = 0; i < samples.length; i++) {
+			energy += samples[i] * samples[i] - (i >= w ? samples[i - w] * samples[i - w] : 0);
+			if (i >= w - 1 && energy > best) { best = energy; bestAt = i - w + 1; }
+		}
+		const start = Math.max(0, Math.min(samples.length - fe.rate, bestAt + w / 2 - fe.rate / 2));
+		clip = samples.slice(start, start + fe.rate);
+	}
+	recent.length = 0;
+	lastWord = "";
+	lastTime = -1e9;
+	const saved = threshold;
+	threshold = 0;          // always name the file's best guess
+	classify(clip);
+	threshold = saved;
+	$("status").textContent = `${file.name}: classified its loudest second.`;
+}
+
+$("start").onclick = start;
+$("stop").onclick = stop;
+$("threshold").oninput = e => {
+	threshold = Number(e.target.value);
+	$("threshold-value").textContent = `${Math.round(threshold * 100)}%`;
+};
+$("file").onchange = e => e.target.files[0] && classifyFile(e.target.files[0]).catch(err => {
+	$("status").textContent = `Could not read ${e.target.files[0].name}: ${err.message}`;
+});
+showProbabilities(new Array(classes.length).fill(0));
+$("status").textContent = `Model loaded (${model.layers.length} layers). Press Start and allow the microphone.`;
+</script>
+</body>
+</html>

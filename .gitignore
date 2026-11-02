@@ -6,6 +6,7 @@ __pycache__/
 activity_deploy/
 fashion_deploy/
 texture_deploy/
+kws_deploy/
 
 # data files
 fashion-mnist_train.csv
