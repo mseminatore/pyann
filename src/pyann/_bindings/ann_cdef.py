@@ -1,5 +1,11 @@
 """C declarations for ann.h"""
 
+# The oldest libann (ANN_VERSION_STRING in ann.h) these declarations work
+# with; pyann warns when it loads an older one, and newer ones load quietly.
+# Raise it when the cdef starts using something a newer libann added.
+# tests/test_binding_coverage.py checks the ann/ submodule meets it.
+LIBANN_MIN_VERSION = "0.10.0"
+
 ANN_CDEF = """
 // Forward declarations
 typedef struct Network Network;

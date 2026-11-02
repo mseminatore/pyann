@@ -6,12 +6,12 @@ import os
 import sys
 import warnings
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from cffi import FFI, FFIError
 
 from pyann._bindings.tensor_cdef import TENSOR_CDEF
-from pyann._bindings.ann_cdef import ANN_CDEF
+from pyann._bindings.ann_cdef import ANN_CDEF, LIBANN_MIN_VERSION
 from pyann.exceptions import LibraryNotFoundError, record_c_error
 
 # Create FFI instance
@@ -244,6 +244,35 @@ def _preload_windows_dependencies(lib_path: Path) -> None:
             ctypes.WinDLL(str(dll))
 
 
+def _loaded_version(loaded_lib: object) -> Optional[str]:
+    """The loaded libann's version, or None for one older than 0.10.0 (no ann_get_version)."""
+    try:
+        return ffi.string(loaded_lib.ann_get_version()).decode()
+    except (FFIError, AttributeError):
+        return None
+
+
+def _version_tuple(version: str) -> Optional[Tuple[int, ...]]:
+    """"0.10.0" as (0, 10, 0), or None for a version that isn't MAJOR.MINOR.PATCH."""
+    parts = version.split(".")
+    return tuple(int(p) for p in parts) if len(parts) == 3 and all(p.isdigit() for p in parts) else None
+
+
+def _version_too_old(version: Optional[str], lib_path: str) -> Optional[str]:
+    """The warning for a libann older than LIBANN_MIN_VERSION, or None (newer ones are fine).
+
+    version None is a library from before 0.10.0, which had no ann_get_version.
+    """
+    if version is not None:
+        found = _version_tuple(version)
+        if found is None or found >= _version_tuple(LIBANN_MIN_VERSION):
+            return None
+    found = f"libann {version}" if version else "a libann older than 0.10.0"
+    return (f"pyann needs libann {LIBANN_MIN_VERSION} or later but loaded {found} from {lib_path}, so "
+            f"some functions may be missing. Rebuild libann (pip install -e . or build_lib.py) or delete "
+            f"the stale copy, or set PYANN_LIB_PATH to the directory of a newer one.")
+
+
 def _load_library() -> object:
     """Load the libann shared library.
 
@@ -258,7 +287,11 @@ def _load_library() -> object:
     if sys.platform == "win32":
         _preload_windows_dependencies(Path(lib_path))
     _lib = ffi.dlopen(lib_path)
-    _backend_info = _detect_backends(_lib, lib_path)
+    version = _loaded_version(_lib)
+    message = _version_too_old(version, lib_path)
+    if message:
+        warnings.warn(message, RuntimeWarning, stacklevel=3)
+    _backend_info = {"libann": version, **_detect_backends(_lib, lib_path)}
     if _error_callback is not None:
         _lib.ann_set_error_log_callback(_error_callback)
 
@@ -269,7 +302,8 @@ def get_backend_info() -> Dict[str, Optional[str]]:
     """Return detected acceleration backend information.
 
     Returns:
-        Dict with keys: libann (the loaded libann's version, e.g. "0.10.0"),
+        Dict with keys: libann (the loaded libann's version, e.g. "0.10.0";
+        None for one older than 0.10.0),
         blas, gpu (backend compiled in), gpu_active
         (backend in use after enable_gpu(), else None), cblas_config, cblas_corename, cblas_isa
         (None when the corresponding backend is not compiled in), threads (CPU
@@ -277,7 +311,7 @@ def get_backend_info() -> Dict[str, Optional[str]]:
         Debug, build of libann, which trains much slower).
     """
     _load_library()
-    info = {"libann": ffi.string(_lib.ann_get_version()).decode(), **_backend_info}
+    info = dict(_backend_info)
     build = ffi.new("Backend_info *")
     if _lib.ann_get_backend_info(build) == 0:
         info["threads"] = build.threads

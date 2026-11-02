@@ -8,7 +8,8 @@ from pathlib import Path
 import pytest
 
 import pyann
-from pyann._bindings.ffi import _find_library, _package_dirs
+from pyann._bindings.ann_cdef import LIBANN_MIN_VERSION
+from pyann._bindings.ffi import _find_library, _package_dirs, _version_too_old, _version_tuple
 
 LIB = {"win32": "ann.dll", "darwin": "libann.dylib"}.get(sys.platform, "libann.so")
 
@@ -70,3 +71,27 @@ class TestLibraryLookup:
         with warnings.catch_warnings():
             warnings.simplefilter("error")
             assert _find_library([tmp_path / "a"]) == str(chosen)
+
+
+class TestLibraryVersion:
+    def test_the_minimum_and_newer_versions_are_fine(self):
+        major, minor, patch = _version_tuple(LIBANN_MIN_VERSION)
+        for version in (LIBANN_MIN_VERSION, f"{major}.{minor}.{patch + 1}", f"{major}.{minor + 1}.0", f"{major + 1}.0.0"):
+            assert _version_too_old(version, "/x/libann.dylib") is None, version
+
+    def test_an_older_version_warns_with_both_and_the_path(self):
+        message = _version_too_old("0.9.9", "/x/libann.dylib")
+        assert f"needs libann {LIBANN_MIN_VERSION} or later" in message
+        assert "loaded libann 0.9.9 from /x/libann.dylib" in message
+
+    def test_versions_compare_as_numbers(self):
+        # 0.10.0 is newer than 0.9.0 (not as strings)
+        assert _version_tuple("0.10.0") > _version_tuple("0.9.0")
+        assert _version_tuple("1.2") is None and _version_tuple("0.10.0-rc1") is None
+
+    def test_a_library_without_a_version_is_older(self):
+        assert "older than 0.10.0" in _version_too_old(None, "/x/libann.dylib")
+
+    def test_the_loaded_library_meets_the_minimum(self):
+        # a stale library would also have warned at import
+        assert _version_tuple(pyann.backend_info()["libann"]) >= _version_tuple(LIBANN_MIN_VERSION)

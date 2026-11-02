@@ -195,6 +195,17 @@ class TestSignatures:
         assert not mismatched, f"signatures differ between libann headers and the cdef: {mismatched}"
 
 
+class TestVersion:
+    def test_submodule_meets_the_minimum_version(self):
+        # the libann pyann builds against must be new enough for the cdef
+        from pyann._bindings.ann_cdef import LIBANN_MIN_VERSION
+        from pyann._bindings.ffi import _version_tuple
+        header = (ANN_DIR / "ann.h").read_text(encoding="utf-8", errors="replace")
+        m = re.search(r'^#define\s+ANN_VERSION_STRING\s+"([^"]+)"', header, flags=re.M)
+        assert m and _version_tuple(m.group(1)) >= _version_tuple(LIBANN_MIN_VERSION), (
+            f"ann.h is libann {m and m.group(1)}, older than LIBANN_MIN_VERSION {LIBANN_MIN_VERSION}")
+
+
 class TestEnums:
     @pytest.mark.parametrize("header,cdef", [("ann.h", ANN_CDEF), ("tensor.h", TENSOR_CDEF)])
     def test_enum_values_match(self, header, cdef):
