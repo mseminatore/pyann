@@ -27,7 +27,12 @@ from pathlib import Path
 
 import numpy as np
 
-from pyann import Sequential, Tokenizer, pad_sequences
+try:
+    # split_contractions: the saved tokenizer's preprocessing needs this pyann or newer
+    from pyann import Sequential, Tokenizer, pad_sequences, split_contractions  # noqa: F401
+except ImportError as e:
+    sys.exit(f"This example needs the pyann in this repository, newer than the installed one ({e}).\n"
+             "From the repository root: pip install -e .")
 from example_data import DATA_DIR
 
 

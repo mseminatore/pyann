@@ -142,6 +142,24 @@ class TestStandaloneExamples:
         assert (tmp_path / "texture_deploy" / "texture_q.h").exists()
         assert (tmp_path / "texture_deploy" / "ann_rt.h").exists()
 
+    def test_keyword_spotting(self, tmp_path):
+        # a stereo 22.05 kHz recording, mixed to mono and resampled to 16 kHz
+        import wave
+        tone = (0.3 * np.sin(2 * np.pi * 440 * np.arange(22050) / 22050) * 32767).astype("<i2")
+        with wave.open(str(tmp_path / "mine.wav"), "wb") as w:
+            w.setnchannels(2)
+            w.setsampwidth(2)
+            w.setframerate(22050)
+            w.writeframes(np.repeat(tone, 2).tobytes())
+
+        out = run_example("keyword_spotting.py", "--synthetic", "-e", "1", "--samples", "400",
+                          "--stream-words", "8", "--wav", "mine.wav", cwd=tmp_path)
+        assert "Test accuracy" in out and "int8 test accuracy" in out
+        assert "test words separated by noise" in out and "false alarms" in out
+        assert "mine.wav: " in out
+        assert (tmp_path / "kws_deploy" / "kws_q.h").exists()
+        assert (tmp_path / "kws_deploy" / "ann_rt.h").exists()
+
     def test_online_learning(self, tmp_path):
         out = run_example("online_learning.py", "--batches", "40", cwd=tmp_path)
         assert "saved and reloaded" in out
