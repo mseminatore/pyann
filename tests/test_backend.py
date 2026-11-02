@@ -7,6 +7,7 @@ elsewhere; with neither set the test is skipped.
 """
 
 import os
+import re
 import sys
 
 import pytest
@@ -45,3 +46,8 @@ class TestExpectedBackend:
 @pytest.mark.skipif(EXPECTED_GPU == "unset", reason="no expected GPU backend configured")
 def test_gpu_backend():
     assert pyann.backend_info()["gpu"] == EXPECTED_GPU
+
+
+def test_libann_version():
+    # the version of the libann that is loaded, as ann.h sets it
+    assert re.fullmatch(r"\d+\.\d+\.\d+", pyann.backend_info()["libann"])

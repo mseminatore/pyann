@@ -66,7 +66,10 @@ target_compile_definitions(ann PRIVATE ANN_BUILDING_DLL)
 # Wheels can't hold the symlinks a versioned library needs, so only
 # versioned in development builds
 if(NOT SKBUILD)
-    set_target_properties(ann PROPERTIES VERSION ${PROJECT_VERSION} SOVERSION 0)
+    # libann's own version, from ann.h (e.g. libann.0.10.0.dylib)
+    file(STRINGS ${ANN_SOURCE_DIR}/ann.h ANN_VERSION_LINE REGEX "^#define ANN_VERSION_STRING")
+    string(REGEX MATCH "[0-9]+\\.[0-9]+\\.[0-9]+" ANN_VERSION "${ANN_VERSION_LINE}")
+    set_target_properties(ann PROPERTIES VERSION ${ANN_VERSION} SOVERSION 0)
 endif()
 
 # Include directories

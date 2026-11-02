@@ -126,6 +126,7 @@ typedef struct {
     int optimized;
 } Backend_info;
 int ann_get_backend_info(Backend_info *info);
+const char *ann_get_version(void);
 
 // GPU (only present when built with USE_METAL or USE_CUDA)
 int ann_gpu_init(void);

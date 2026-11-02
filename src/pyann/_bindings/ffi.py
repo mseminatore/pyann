@@ -269,14 +269,15 @@ def get_backend_info() -> Dict[str, Optional[str]]:
     """Return detected acceleration backend information.
 
     Returns:
-        Dict with keys: blas, gpu (backend compiled in), gpu_active
+        Dict with keys: libann (the loaded libann's version, e.g. "0.10.0"),
+        blas, gpu (backend compiled in), gpu_active
         (backend in use after enable_gpu(), else None), cblas_config, cblas_corename, cblas_isa
         (None when the corresponding backend is not compiled in), threads (CPU
         threads libann uses), and optimized (False for an unoptimized, e.g.
         Debug, build of libann, which trains much slower).
     """
     _load_library()
-    info = dict(_backend_info)
+    info = {"libann": ffi.string(_lib.ann_get_version()).decode(), **_backend_info}
     build = ffi.new("Backend_info *")
     if _lib.ann_get_backend_info(build) == 0:
         info["threads"] = build.threads
