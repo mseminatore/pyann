@@ -14,18 +14,30 @@ from pyann.utils.compat import ArrayLike, has_numpy, to_array
 from pyann.exceptions import InvalidParameterError, NetworkError, raise_for_error_code
 
 
-def runtime_header_path() -> Path:
-    """Path of ``ann_rt.h``, the runtime that exported C headers include.
+def runtime_path(name: str) -> Path:
+    """Path of one of libann's runtimes: ``ann_rt.h`` (for exported C
+    headers) or ``ann_rt.js`` (for exported JavaScript modules).
 
-    Wheels ship it in ``pyann/include``; development builds use the copy in
-    the ``ann/`` submodule.
+    Wheels ship them in ``pyann/include``; development builds use the copies
+    in the ``ann/`` submodule.
     """
     package_dir = Path(__file__).resolve().parent.parent
-    for candidate in (package_dir / "include" / "ann_rt.h",
-                      package_dir.parent.parent / "ann" / "ann_rt.h"):
+    for candidate in (package_dir / "include" / name, package_dir.parent.parent / "ann" / name):
         if candidate.exists():
             return candidate
-    raise FileNotFoundError("ann_rt.h not found; reinstall pylibann or check out the ann/ submodule")
+    raise FileNotFoundError(f"{name} not found; reinstall pylibann or check out the ann/ submodule")
+
+
+def runtime_header_path() -> Path:
+    """Path of ``ann_rt.h``, the runtime that exported C headers include."""
+    return runtime_path("ann_rt.h")
+
+
+def _copy_runtime(name: str, directory: Path) -> None:
+    target = directory.resolve() / name
+    source = runtime_path(name)
+    if target != source:
+        shutil.copyfile(source, target)
 
 
 def _prefix_for(filepath: Path, prefix: Optional[str]) -> str:
@@ -47,10 +59,17 @@ def export_c_header(net_ptr, q_ptr, filepath: Union[str, Path], prefix: Optional
                                      _prefix_for(filepath, prefix).encode())
     raise_for_error_code(result, f"Failed to export C header to {filepath}")
     if runtime:
-        target = filepath.resolve().parent / "ann_rt.h"
-        source = runtime_header_path()
-        if target != source:
-            shutil.copyfile(source, target)
+        _copy_runtime("ann_rt.h", filepath.parent)
+    return filepath
+
+
+def export_js(net_ptr, filepath: Union[str, Path], runtime: bool) -> Path:
+    """Write a float model as a JavaScript module and, if asked, ann_rt.js next to it."""
+    filepath = Path(filepath)
+    result = lib.ann_export_js(net_ptr, str(filepath).encode())
+    raise_for_error_code(result, f"Failed to export JavaScript to {filepath}")
+    if runtime:
+        _copy_runtime("ann_rt.js", filepath.parent)
     return filepath
 
 

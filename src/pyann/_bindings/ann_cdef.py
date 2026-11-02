@@ -183,6 +183,7 @@ int ann_quantized_predict_ids(const PQuantizedNetwork q, const int *ids, signed 
 int ann_quantized_get_io_params(const PQuantizedNetwork q, real *in_scale, int *in_zero_point,
                                 real *out_scale, int *out_zero_point);
 real ann_quantized_evaluate_accuracy(const PQuantizedNetwork q, const PTensor inputs, const PTensor outputs);
+int ann_export_js(const PNetwork pnet, const char *filename);
 int ann_export_c_header(const PNetwork pnet, const PQuantizedNetwork q, const char *filename,
                         const char *prefix);
 

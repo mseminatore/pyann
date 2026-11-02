@@ -1249,6 +1249,37 @@ class Sequential:
             raise NetworkError("Cannot export untrained model")
         return export_c_header(self._ptr, ffi.NULL, filepath, prefix, runtime)
 
+    def export_js(self, filepath: Union[str, Path], runtime: bool = True) -> Path:
+        """Export the model's float32 weights as a JavaScript module, for the
+        browser or Node.
+
+        The ES module exports ``predict(input)`` (one sample's values, or
+        token ids for a text model; returns a ``Float32Array``, with softmax
+        applied), ``argmax(output)`` and the ``model`` itself. It imports
+        ``ann_rt.js``, libann's JavaScript runtime, which is copied next to it
+        unless ``runtime`` is False. Weights are stored as base64, about 5.3
+        bytes per parameter. Results match :meth:`predict` to float32 rounding.
+
+        Example (browser)::
+
+            <script type="module">
+              import { predict, argmax } from "./model.js";
+              const output = predict(pixels);    // 784 values for a 28x28 image
+            </script>
+
+        Args:
+            filepath: Output file, e.g. ``"model.js"``
+            runtime: Also write ``ann_rt.js`` into the same directory
+
+        Returns:
+            The module's path
+        """
+        from pyann.core.quantized import export_js
+
+        if not self._built:
+            raise NetworkError("Cannot export untrained model")
+        return export_js(self._ptr, filepath, runtime)
+
     def export_pikchr(self, filepath: Union[str, Path]) -> None:
         """Export network architecture as a PIKCHR diagram.
         

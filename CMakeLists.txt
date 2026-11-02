@@ -307,9 +307,10 @@ if(SKBUILD)
         LIBRARY DESTINATION pyann/lib
         RUNTIME DESTINATION pyann/lib
     )
-    # The runtime exported C headers need (see Sequential.export_c_header);
-    # development builds use the copy in the ann/ submodule
-    install(FILES ${ANN_SOURCE_DIR}/ann_rt.h DESTINATION pyann/include)
+    # The runtimes exported C headers and JavaScript modules need (see
+    # Sequential.export_c_header and export_js); development builds use the
+    # copies in the ann/ submodule
+    install(FILES ${ANN_SOURCE_DIR}/ann_rt.h ${ANN_SOURCE_DIR}/ann_rt.js DESTINATION pyann/include)
     if(USE_SCIPY_OPENBLAS)
         # Ship OpenBLAS (and its runtime dependencies) next to libann so the
         # wheel works without scipy-openblas32 installed, including source
