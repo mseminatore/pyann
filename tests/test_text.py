@@ -10,7 +10,7 @@ import pytest
 
 import pyann
 import pyann.utils.compat as compat
-from pyann import (BatchNormalization, Conv1D, Conv2D, Dense, Embedding, GlobalAveragePooling1D,
+from pyann import (BatchNormalization, Conv1D, Conv2D, Dense, Embedding, Flatten, GlobalAveragePooling1D,
                    GlobalMaxPool2D, GlobalMaxPooling1D, GlobalMaxPooling2D, MaxPool1D, Sequential, Tokenizer,
                    load_word_vectors, pad_sequences, split_contractions, strip_html)
 from pyann.exceptions import NetworkError
@@ -302,6 +302,70 @@ class TestTextClassifier:
         if active and pyann.backend_info()["gpu_active"] in ("metal", "vulkan"):
             assert model._gpu_uploaded
         assert model.evaluate(x_test, y_test) >= 0.85
+
+
+def _pool_model(table, length=8, pool=4, strides=None, masked=True):
+    # ids -> Embedding (id i's value is table[i], 0 pads) -> MaxPool1D -> Flatten
+    weights = np.asarray(table, np.float32).reshape(-1, 1)
+    model = Sequential([Embedding(len(table), 1, padding_idx=0, mask_padding=masked, input_length=length,
+                                  weights=weights),
+                        MaxPool1D(pool, strides=strides), Flatten()])
+    model.compile(optimizer="sgd", loss="mse")
+    out = (length - pool) // (strides or pool) + 1
+    model.fit(np.ones((1, length), np.float32), np.zeros((1, out), np.float32), epochs=1, verbose=0)
+    return model.set_layer_weights(0, [weights])     # predict() needs a trained model: undo that step
+
+
+# id i is i - 10, so the zero padding vector would win any window it was in
+BELOW_ZERO = [0, -9, -8, -7, -6, -5]
+
+
+class TestMaskedMaxPool:
+    """A masked MaxPool1D keeps a window with any real step and takes the
+    largest of those; only a window of nothing but padding is masked (pyann#34)."""
+
+    @pytest.mark.parametrize("ids, positive, negative", [
+        ([1, 2, 3, 4, 5, 4, 3, 2], [4, 5], [-6, -5]),
+        ([1, 2, 3, 0, 5, 4, 3, 2], [3, 5], [-7, -5]),   # padding inside a window
+        ([5, 0, 0, 0, 3, 0, 0, 0], [5, 3], [-5, -7]),   # one real step per window
+        ([1, 2, 3, 4, 5, 4, 0, 0], [4, 5], [-6, -5]),   # padding at the end
+        ([1, 2, 3, 4, 0, 0, 0, 0], [4, 0], [-6, 0]),    # a window of nothing but padding gives 0
+    ])
+    def test_pools_the_real_steps(self, ids, positive, negative):
+        row = np.array([ids], np.float32)
+        assert _pool_model(range(6)).predict(row)[0].tolist() == positive
+        assert _pool_model(BELOW_ZERO).predict(row)[0].tolist() == negative
+
+    def test_overlapping_windows(self):
+        row = np.array([[0, 0, 0, 1, 0, 0, 0, 0]], np.float32)
+        assert _pool_model(BELOW_ZERO, strides=2).predict(row)[0].tolist() == [-9, -9, 0]
+
+    def test_without_the_mask_padding_counts(self):
+        row = np.array([[1, 2, 3, 0, 5, 4, 3, 2]], np.float32)
+        assert _pool_model(BELOW_ZERO, masked=False).predict(row)[0].tolist() == [0, -5]
+
+    def test_end_padding_matches_unpadded_when_windows_fill_it(self):
+        # 6 ids fill MaxPool1D(2)'s windows, so padding them to 10 changes nothing
+        def model(length):
+            m = Sequential([Embedding(12, 4, mask_zero=True, input_length=length),
+                            Conv1D(5, 3, padding="same", activation="tanh"), MaxPool1D(2),
+                            GlobalAveragePooling1D(), Dense(2, activation="softmax")])
+            return m.compile(optimizer="adam", loss="cce")
+        rng = np.random.default_rng(5)
+        short = rng.integers(1, 12, size=(8, 6)).astype(np.float32)
+        padded = pad_sequences(short.astype(int).tolist(), maxlen=10).astype(np.float32)
+        y = np.eye(2, dtype=np.float32)[np.arange(8) % 2]
+        a, b = model(10), model(6)
+        a.fit(padded, y, epochs=2, verbose=0)
+        b.fit(short, y, epochs=1, verbose=0)
+        b.set_weights(a.get_weights())
+        assert np.allclose(a.predict(padded), b.predict(short), atol=1e-5)
+
+    def test_onnx_round_trip_keeps_the_rule(self, tmp_path):
+        model = _pool_model(BELOW_ZERO, strides=2)
+        back = Sequential.load_onnx(_onnx(model, tmp_path / "pool.onnx.json"))
+        rows = np.array([[1, 2, 3, 0, 5, 4, 3, 2], [0, 0, 0, 1, 0, 0, 0, 0]], np.float32)
+        assert np.array_equal(back.predict(rows), model.predict(rows))
 
 
 def _save(model, path, fmt):

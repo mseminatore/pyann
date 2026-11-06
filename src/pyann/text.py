@@ -260,8 +260,9 @@ def pad_sequences(sequences: Iterable[Sequence[int]], maxlen: Optional[int] = No
 
     Padding goes after the text by default (Keras pads before): with a
     masked Embedding, a text padded at the end gives exactly what it would
-    unpadded, also through strided layers, while padding before does so
-    only when every stride is 1.
+    unpadded, also through strided layers (as long as the unpadded text fills
+    each MaxPool1D's windows), while padding before does so only when every
+    stride is 1 and there is no MaxPool1D.
 
     Args:
         sequences: Lists of token ids
