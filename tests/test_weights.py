@@ -224,6 +224,9 @@ class TestFreezing:
 
     def test_embedding_with_pretrained_frozen_vectors(self, texts):
         x, y = texts
+        # seeded: the accuracy check below would otherwise depend on the random
+        # numbers the tests run before this one used (some starts reach only 0.85)
+        pyann.set_seed(1)
         teacher = text_model()
         teacher.fit(x, y, epochs=30, verbose=0)
         vectors = teacher.get_layer_weights(0)[0]
