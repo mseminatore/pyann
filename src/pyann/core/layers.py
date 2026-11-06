@@ -405,6 +405,10 @@ class MaxPool2D(_PoolBase):
 class MaxPool1D(_PoolBase):
     """1-D max pooling over sequences (channels, steps), applied to each channel.
     
+    Over a masked sequence (see Embedding) a window is kept when any of its
+    steps is real, and takes the largest of the real steps; a window of
+    nothing but padding outputs 0 and stays masked for the layers above.
+    
     Args:
         pool_size: Window length in steps
         strides: Step between windows; defaults to pool_size
@@ -549,7 +553,15 @@ class Embedding(Layer):
     ``mask_zero``, which makes 0 the padding id) the padding steps are also
     left out of the layers above: Conv1D, MaxPool1D and BatchNormalization
     outputs are zero there, batch norm statistics and global pooling skip
-    them, so a text padded at the end gives what it would unpadded.
+    them. A Conv1D step is masked when any step its window reads (less its
+    padding) is padding; a MaxPool1D window only when all its steps are, and
+    it pools the real ones. So a text padded at the end gives what it would
+    unpadded, as long as the unpadded text fills each MaxPool1D's windows.
+    
+    The mask going through Conv1D and MaxPool1D is a libann extension: Keras
+    drops ``mask_zero``'s mask at those layers (and GlobalMaxPooling1D ignores
+    it), and PyTorch has no masks. To match a Keras or PyTorch model's numbers,
+    use ``padding_idx`` without ``mask_padding``.
     
     Args:
         input_dim: Vocabulary size (number of token ids)

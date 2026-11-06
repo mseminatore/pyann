@@ -292,10 +292,32 @@ open("tokenizer.json", "w").write(tok.to_json())   # keep it with the model: new
 `mask_zero=True` (or `padding_idx=` with `mask_padding=True`) leaves the
 padding out of everything above the embedding: `Conv1D`, `MaxPool1D` and
 `BatchNormalization` outputs are zero there, and batch norm statistics and
-global pooling skip it, so a text padded at the end gives what it would
-unpadded (`pad_sequences` pads at the end by default for this reason; padding
-at the start also works when every stride is 1). Without a mask the padding
-vector is still zero, but a conv's bias makes the padding steps count. Text
+global pooling skip it. Each layer works out its mask from the one below:
+
+- a `Conv1D` step is masked when any step its window reads (less the
+  window's padding) is padding, so the conv keeps exactly the steps it would
+  give the text unpadded;
+- a `MaxPool1D` window is masked only when all its steps are padding;
+  otherwise it takes the largest of its real steps, so padding inside a window
+  is skipped rather than zeroing the window;
+- `BatchNormalization` keeps the mask below it.
+
+So a text padded at the end gives what it would unpadded (`pad_sequences`
+pads at the end by default for this reason), as long as the unpadded text
+fills each `MaxPool1D`'s windows (its length there, less the window, a
+multiple of the stride); otherwise the padded text also pools its last few
+steps, which the unpadded one would drop. Padding at the start also works
+when every stride is 1 and there is no `MaxPool1D`. Without a mask the padding
+vector is still zero, but a conv's bias makes the padding steps count.
+
+**This goes beyond Keras and PyTorch.** pyann's `mask_zero` follows Keras's
+name, but Keras drops the mask at `Conv1D` and `MaxPooling1D` (with a
+warning) and `GlobalMaxPooling1D` ignores it, so in Keras the padding counts
+again after the first convolution. PyTorch has no masks at all: its
+`nn.Embedding(padding_idx=0)` is pyann's `padding_idx` without
+`mask_padding`. In pyann the mask reaches global pooling. The two agree
+whenever the padding wouldn't have changed the answer; to reproduce a Keras or
+PyTorch text model's numbers exactly, use `padding_idx=0` without the mask. Text
 models train on the GPU with Metal or Vulkan, save and load (the mask
 included), export to ONNX, and quantize to int8 C headers that take the token
 ids (see [int8 Quantization and C Export](#int8-quantization-and-c-export)). See
@@ -843,8 +865,9 @@ GlobalAveragePooling2D(name=None)                # each channel's mean; aliases 
   Its product must equal the previous layer's output size.
 - `input_dim`, `output_dim`: an embedding's vocabulary size (ids `0 .. input_dim - 1`)
   and vector length; `padding_idx` pads texts (its vector stays zero);
-  `mask_padding` leaves those steps out of the layers above, and `mask_zero`
-  means both with padding id 0; `weights` gives starting vectors
+  `mask_padding` leaves those steps out of the layers above (further than
+  Keras does; see [Text](#text) for the rules), and `mask_zero` means both
+  with padding id 0; `weights` gives starting vectors
   `(input_dim, output_dim)` (e.g. from `load_word_vectors`), and
   `trainable=False` keeps them fixed.
 - `name`: optional label for the layer.
