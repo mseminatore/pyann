@@ -27,6 +27,7 @@ from pyann.optimizers import Optimizer, SGD, Momentum, RMSProp, AdaGrad, Adam
 from pyann.losses import Loss, LossReduction
 from pyann.activations import Activation
 from pyann.weight_init import WeightInit
+from pyann.weight_format import WeightFormat
 from pyann._bindings.ffi import (
     get_backend_info as backend_info,
     enable_gpu,
@@ -78,6 +79,7 @@ __all__ = [
     "LossReduction",
     "Activation",
     "WeightInit",
+    "WeightFormat",
     "backend_info",
     "enable_gpu",
     "gpu_enabled",

@@ -1,5 +1,7 @@
 """Tests for non-square, grouped and depthwise convolutions, and 1-D layers for sequences."""
 
+import re
+
 import pytest
 
 import pyann
@@ -259,7 +261,10 @@ class TestQuantize:
         q = model.quantize(x)
         assert (q.predict(x).argmax(1) == model.predict(x).argmax(1)).mean() >= 0.95
         header = q.export_c_header(tmp_path / "waves_q.h", "waves_q", runtime=False)
-        assert "ANN_RT_VERSION < 8" in header.read_text()
+        # the header needs the ann_rt.h it was exported with
+        runtime = pyann.runtime_header_path().read_text()
+        version = re.search(r"#define ANN_RT_VERSION (\d+)", runtime).group(1)
+        assert f"ANN_RT_VERSION < {version}" in header.read_text()
 
     def test_mobilenet(self):
         x, y = bars()
