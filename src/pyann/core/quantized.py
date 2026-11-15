@@ -77,9 +77,11 @@ class QuantizedModel:
     """An int8 version of a trained Sequential model.
 
     Made by :meth:`Sequential.quantize`. Weights are int8 with one scale per
-    output channel, activations are int8 with one scale and zero point per
-    tensor, and sums are int32, so the model runs on integer-only hardware.
-    It does not depend on the model it came from.
+    output channel (or packed 4, 2 or 1 bits for layers given a low-bit
+    format, see :meth:`Sequential.set_weight_format`), activations are int8
+    with one scale and zero point per tensor, and sums are int32, so the
+    model runs on integer-only hardware. It does not depend on the model it
+    came from.
 
     A text model (one starting with an Embedding) takes token ids, as the
     float model does; they stay ids (see :meth:`predict_int8`).
@@ -108,6 +110,13 @@ class QuantizedModel:
         self.input_zero_point = int(in_zp[0])
         self.output_scale = float(out_scale[0])
         self.output_zero_point = int(out_zp[0])
+
+    @property
+    def param_bytes(self) -> int:
+        """Bytes of parameters the int8 model holds: packed weights, biases,
+        rescaling multipliers and shifts, and activation tables (what an
+        exported header stores, less the layer descriptions)."""
+        return int(lib.ann_quantized_param_bytes(self._ptr))
 
     def _rows(self, x: ArrayLike, name: str, columns: int):
         """x as a list or 2-D array of rows, checked against the column count."""

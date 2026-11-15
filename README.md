@@ -15,7 +15,7 @@ Python wrapper for the [libann](https://github.com/mseminatore/ann) neural netwo
 - **Hyperparameter tuning**: Grid search, Random search, Gaussian-process Bayesian optimization, TPE, with early stopping, custom scoring and network-shape search (pure-Python searches built on `Sequential`; libann's native hypertuner is not exposed)
 - **NumPy optional**: Works with Python lists, optimized for NumPy arrays
 - **Model persistence**: Save/load in text or binary format, ONNX export/import (including CNNs and PyTorch-style ONNX JSON)
-- **Deploy to microcontrollers**: Quantize a trained model to int8 and export it as a standalone C header (integer-only inference, no `malloc`), or export float32 weights
+- **Deploy to microcontrollers**: Quantize a trained model to int8 and export it as a standalone C header (integer-only inference, no `malloc`), or export float32 weights; train Dense and conv layers for 4-bit, ternary (2-bit) or binary (1-bit) weights to shrink it further
 - **Network visualization**: Export architecture as PIKCHR diagrams (renders to SVG)
 - **Regularization**: L1 and L2 (weight decay) regularization, dropout
 - **Evaluation**: Accuracy scoring, confusion matrix with MCC
@@ -699,6 +699,37 @@ reviews_predict(ids, scores, workspace);
 parameters becoming 2.1 MB. See libann's
 [C export guide](https://github.com/mseminatore/ann/blob/main/docs/C_EXPORT.md)
 for the scheme and generated API.
+
+#### Low-bit weights (int4, ternary, binary)
+
+For smaller models still, Dense and conv layers can store their weights in 4,
+2 (ternary) or 1 (binary) bits, with one scale per output channel. Rounding
+trained weights that far loses accuracy, so the model trains for it
+(quantization-aware training): set the format, then fine-tune.
+
+```python
+model.fit(x_train, y_train, epochs=5)            # train in float as usual
+model.set_weight_format('binary')                # every Dense/conv layer but the output
+model.compile(learning_rate=0.0005)
+for epoch in range(3):                           # fine-tune; fit() works too
+    for i in range(0, len(x_train), 32):
+        model.train_on_batch(x_train[i:i + 32], y_train[i:i + 32])
+model.end_online_training()
+
+q = model.quantize(x_train[:1000])               # hidden weights packed 1 bit each
+print(q.evaluate(x_test, y_test), q.param_bytes)
+q.export_c_header('model.h')
+```
+
+From then on the layer computes with its rounded weights: `predict`,
+`evaluate`, `save` and every export use them, while training updates float
+weights underneath (`get_layer_weights` reads those). `set_weight_format(fmt,
+layer)` sets one layer, `get_weight_format(layer)` reads it, and `summary()`
+marks low-bit layers. Low-bit models train on the CPU. On Fashion-MNIST, a
+784-128-10 MLP with a binary hidden layer keeps 87.9% test accuracy (float32:
+88.5%) in 14.7 KB of parameters, against 100.5 KB as int8; ternary keeps 89.1%
+in 27 KB. See libann's
+[low-bit weights guide](https://github.com/mseminatore/ann/blob/main/docs/C_EXPORT.md#low-bit-weights).
 
 ### Network Visualization
 

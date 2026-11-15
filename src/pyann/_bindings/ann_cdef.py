@@ -4,7 +4,7 @@
 # with; pyann warns when it loads an older one, and newer ones load quietly.
 # Raise it when the cdef starts using something a newer libann added.
 # tests/test_binding_coverage.py checks the ann/ submodule meets it.
-LIBANN_MIN_VERSION = "0.10.0"
+LIBANN_MIN_VERSION = "0.11.0"
 
 ANN_CDEF = """
 // Forward declarations
@@ -53,6 +53,14 @@ typedef enum {
     NOISE_MASKING,
     NOISE_SALT_PEPPER
 } Noise_type;
+
+// Weight storage formats (low-bit weights, trained for)
+typedef enum {
+    WEIGHT_FORMAT_FLOAT,
+    WEIGHT_FORMAT_INT4,
+    WEIGHT_FORMAT_TERNARY,
+    WEIGHT_FORMAT_BINARY
+} Weight_format;
 
 // Loss function types
 typedef enum {
@@ -190,6 +198,7 @@ int ann_quantized_predict_ids(const PQuantizedNetwork q, const int *ids, signed 
 int ann_quantized_get_io_params(const PQuantizedNetwork q, real *in_scale, int *in_zero_point,
                                 real *out_scale, int *out_zero_point);
 real ann_quantized_evaluate_accuracy(const PQuantizedNetwork q, const PTensor inputs, const PTensor outputs);
+size_t ann_quantized_param_bytes(const PQuantizedNetwork q);
 int ann_export_js(const PNetwork pnet, const char *filename);
 int ann_export_c_header(const PNetwork pnet, const PQuantizedNetwork q, const char *filename,
                         const char *prefix);
@@ -257,6 +266,9 @@ int ann_get_layer_param(const PNetwork pnet, int layer, int index, real *values,
 int ann_set_layer_param(PNetwork pnet, int layer, int index, const real *values, int count);
 int ann_set_layer_trainable(PNetwork pnet, int layer, int trainable);
 int ann_get_layer_trainable(const PNetwork pnet, int layer);
+int ann_set_layer_weight_format(PNetwork pnet, int layer, Weight_format format);
+int ann_set_weight_format(PNetwork pnet, Weight_format format);
+Weight_format ann_get_layer_weight_format(const PNetwork pnet, int layer);
 
 // Confusion matrix
 real ann_confusion_matrix(PNetwork pnet, PTensor inputs, PTensor outputs, int *tp, int *fp, int *tn, int *fn);

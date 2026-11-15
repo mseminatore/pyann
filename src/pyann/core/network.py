@@ -15,6 +15,7 @@ from pyann.activations import Activation
 from pyann.losses import Loss, LossReduction, parse_loss, parse_loss_reduction
 from pyann.optimizers import Optimizer, parse_optimizer, OptimizerType
 from pyann.weight_init import WeightInit, parse_weight_init
+from pyann.weight_format import WeightFormat, parse_weight_format
 from pyann.callbacks import (
     LRScheduler, StepDecay, ExponentialDecay, CosineAnnealing,
     EarlyStopping
@@ -713,8 +714,8 @@ class Sequential:
         Training and batch inference only use the GPU for uploaded networks.
         On upload failure the model keeps using the CPU path.
         """
-        if self._gpu_uploaded or not gpu_enabled():
-            return
+        if self._gpu_uploaded or not gpu_enabled() or self._has_low_bit_layers():
+            return      # low-bit layers train on the CPU only
         self._gpu_uploaded = lib.ann_gpu_upload_network(self._ptr) == 0
 
     def _setup_lr_scheduler(self, scheduler: LRScheduler) -> None:
@@ -829,7 +830,8 @@ class Sequential:
     def layers(self) -> List[Layer]:
         """The model's layers after the input, in order. Their positions (or
         the layers themselves) select a layer in get_layer_weights,
-        set_layer_weights, set_trainable and is_trainable."""
+        set_layer_weights, set_trainable, is_trainable, set_weight_format and
+        get_weight_format."""
         return list(self._layers)
 
     def _layer_index(self, layer: Union[int, Layer]) -> int:
@@ -1032,6 +1034,67 @@ class Sequential:
         """False if the layer is frozen (see set_trainable)."""
         self._build()
         return bool(lib.ann_get_layer_trainable(self._ptr, self._layer_index(layer)))
+
+    def set_weight_format(self, format: Union[str, WeightFormat],
+                          layer: Union[int, Layer, None] = None) -> "Sequential":
+        """Store Dense and conv weights in a low-bit format: 'int4', 'ternary'
+        or 'binary' (or back to 'float'), for small exported models.
+
+        With no layer, sets every Dense and conv layer except the output
+        layer, which usually stays int8: it is small, and the most sensitive
+        to rounding. With a layer, sets just that one (the output layer too).
+
+        From then on the layer computes with its weights rounded to the
+        format (one scale per output channel): predict, evaluate, the ONNX,
+        C and JavaScript exports, and training all use the rounded weights,
+        and quantize() packs them 4, 2 or 1 bits per weight. Training is
+        quantization-aware: it updates float weights underneath with the
+        rounded weights' gradient, and get_layer_weights/set_layer_weights
+        read and set those float weights. The usual recipe is to train in
+        float, set the format, then fine-tune a few epochs with
+        train_on_batch at a lower learning rate (fit() also works, from the
+        start).
+
+        Low-bit models train and predict on the CPU, not the GPU. save()
+        keeps the formats (libann before 0.11 cannot load such files); ONNX
+        holds the rounded weights as floats. An open train_on_batch session
+        is ended first (the next call starts a new one, keeping the weights
+        and optimizer state).
+
+        Args:
+            format: 'float', 'int4', 'ternary' or 'binary', or a WeightFormat
+            layer: Position in ``model.layers`` or the layer itself (a Dense
+                or conv layer), or None for every hidden Dense and conv layer
+
+        Returns:
+            self for method chaining
+        """
+        fmt = parse_weight_format(format)
+        self._build()
+        if layer is not None:
+            index = self._layer_index(layer)
+            if not isinstance(self._layers[index - 1], (Dense, _ConvBase)):
+                raise InvalidParameterError(
+                    f"only Dense and conv layers have a weight format, not {type(self._layers[index - 1]).__name__}")
+        self.end_online_training()
+        if layer is None:
+            result = lib.ann_set_weight_format(self._ptr, int(fmt))
+        else:
+            result = lib.ann_set_layer_weight_format(self._ptr, index, int(fmt))
+        raise_for_error_code(result, "Failed to set the weight format")
+        if fmt != WeightFormat.FLOAT:
+            self._gpu_uploaded = False      # libann dropped the GPU copy
+        return self
+
+    def get_weight_format(self, layer: Union[int, Layer]) -> WeightFormat:
+        """A layer's weight format (see set_weight_format); FLOAT for layers
+        without weights."""
+        self._build()
+        return WeightFormat(lib.ann_get_layer_weight_format(self._ptr, self._layer_index(layer)))
+
+    def _has_low_bit_layers(self) -> bool:
+        return self._built and any(lib.ann_get_layer_weight_format(self._ptr, i + 1) != lib.WEIGHT_FORMAT_FLOAT
+                                   for i in range(len(self._layers)))
 
     def save(self, filepath: Union[str, Path], format: str = "text") -> None:
         """Save the model to a file.
@@ -1560,6 +1623,8 @@ class Sequential:
                       else not getattr(layer, "trainable", True))
             if params and frozen:
                 text += " (frozen)"
+            if self._built and lib.ann_get_layer_weight_format(self._ptr, i + 1) != lib.WEIGHT_FORMAT_FLOAT:
+                text += f" ({WeightFormat(lib.ann_get_layer_weight_format(self._ptr, i + 1)).name.lower()} weights)"
             lines.append(f"{text} - {params:,} params" if params else text)
             in_channels = internal_shape[0]
             in_height = internal_shape[1] if len(internal_shape) == 3 else 0
